@@ -326,10 +326,30 @@ _LOCAL_SYSTEM = (
 
 _TRANSCRIPT_SYSTEM = (
     "The knowledge graph had no answer to this question. Answer it using ONLY the "
-    "excerpts of what was actually said, tagged like [t:2], citing them after each "
-    "claim. If they do not contain the answer either, say plainly that nothing "
-    "recorded answers it. Do not invent facts."
+    "excerpts provided: notes, tagged like [n:abc123], and what was actually said in "
+    "recorded sessions, tagged like [t:2]. Cite the tag after each claim, and include "
+    "the specifics the excerpts carry -- names, numbers, reasons. If they do not "
+    "contain the answer either, say plainly that nothing recorded answers it. Do not "
+    "invent facts."
 )
+
+# Notes read when the graph has no answer. Measured 2026-10-06 on twelve project
+# questions: graph-first /ask answered 2 while the same model reading the top
+# notes answered 8 -- long design notes lose their specifics (a model name, a
+# config value) on the way into triples, and the fallback used to read meeting
+# transcripts only, so a workspace with none ended in "nothing recorded" with
+# the answer sitting in a note. RAG_NOTE_FALLBACK=0 restores that behaviour.
+MAX_FALLBACK_NOTES = 6
+MAX_FALLBACK_NOTE_CHARS = 2400
+
+
+def _fallback_notes(question: str) -> list[dict[str, Any]]:
+    if os.environ.get("RAG_NOTE_FALLBACK", "1").strip() == "0":
+        return []
+    try:
+        return db.search_notes(question, limit=MAX_FALLBACK_NOTES) or []
+    except Exception:                                          # noqa: BLE001
+        return []
 
 
 def _passages(question: str) -> list[dict[str, Any]]:
@@ -375,15 +395,26 @@ def _answer_from_passages(question: str, entities: list[str]) -> dict[str, Any]:
     Marked `source: "transcript"` so the UI can say the answer is not in the
     graph yet -- which is also a report that extraction missed something.
     """
+    notes = _fallback_notes(question)
     passages = _passages(question)
-    if not passages:
+    if not notes and not passages:
         return {"mode": "local", "source": "none", "entities": entities, "citations": [],
-                "answer": "Nothing in the knowledge graph or the recorded transcripts answers that."}
-    user = (f"Question: {question}\n\nExcerpts of what was said:\n\n"
-            + "\n\n".join(_passage_lines(passages)))
+                "answer": "Nothing in the knowledge graph, the notes or the recorded transcripts answers that."}
+    blocks = [f"[n:{n['id']}] ({n.get('title') or 'note'})\n"
+              f"{(n.get('content') or '')[:MAX_FALLBACK_NOTE_CHARS]}" for n in notes]
+    user = (f"Question: {question}\n\nExcerpts:\n\n"
+            + "\n\n".join(blocks + _passage_lines(passages)))
     answer = chat(_TRANSCRIPT_SYSTEM, user, temperature=0.2).strip()
-    return {"mode": "local", "source": "transcript", "answer": answer, "entities": entities,
-            "citations": [], "passages": _passage_citations(passages, answer), "facts_used": 0}
+    note_ids = {n["id"] for n in notes}
+    cited_notes = _cited_in(answer, note_ids)
+    cited_passages = bool(re.search(r"\[t:\d+\]", answer))
+    # Labelled by what the answer actually rests on: a note is still memory, a
+    # transcript passage is what was said but never became memory.
+    source = "notes" if cited_notes and not cited_passages else "transcript" if cited_passages else (
+        "notes" if notes and not passages else "transcript")
+    return {"mode": "local", "source": source, "answer": answer, "entities": entities,
+            "citations": _citations(cited_notes) if cited_notes else [],
+            "passages": _passage_citations(passages, answer) if passages else [], "facts_used": 0}
 
 _GLOBAL_SYSTEM = (
     "You answer broad questions about a personal knowledge graph using the cluster "

@@ -129,9 +129,18 @@ _NOTES_BRIEF = {
         "why it was recommended. The presenter's check-ins (\"Is this making sense?\"), "
         "quiz questions put to the class, and stories that teach nothing are not points."
     ),
+    "conversation": (
+        "something a person said about themselves or someone else that is worth "
+        "remembering later: an event and when it happened, a plan, a preference, a "
+        "relationship, a feeling and its reason, an object, place or activity in their "
+        "life. Name the person it is about and keep dates and times as stated, e.g. "
+        "\"Caroline went to an LGBTQ support group yesterday\". Greetings and filler "
+        "are not points."
+    ),
 }
 
-_SESSION_NAME = {"meeting": "a meeting", "lecture": "a lecture or training session"}
+_SESSION_NAME = {"meeting": "a meeting", "lecture": "a lecture or training session",
+                 "conversation": "a conversation"}
 
 AUDIENCE_PROMPT = """\
 You record the AUDIENCE side of one part of a lecture or training session:
@@ -235,6 +244,8 @@ class SessionReader:
     def __call__(self, chunk: Chunk) -> ChunkUnderstanding:
         if self.mode.id == "lecture":
             result = self._read_lecture(chunk)
+        elif self.mode.id == "conversation":
+            result = self._read_conversation(chunk)
         else:
             result = self._read_meeting(chunk)
         if not result.error:
@@ -259,6 +270,14 @@ class SessionReader:
         result.artifacts.extend(notes.artifacts)
         result.rejected.extend(notes.rejected)
         return result
+
+    def _read_conversation(self, chunk: Chunk) -> ChunkUnderstanding:
+        notes, err = self._notes(chunk)
+        if notes is None:
+            return ChunkUnderstanding(chunk_index=chunk.index, error=err, calls=1)
+        notes.calls = 1
+        notes.participants = list(chunk.speakers)
+        return notes
 
     def _read_lecture(self, chunk: Chunk) -> ChunkUnderstanding:
         notes, err_a = self._notes(chunk)

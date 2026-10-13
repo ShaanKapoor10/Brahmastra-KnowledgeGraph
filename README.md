@@ -1,425 +1,342 @@
-# Brahmastra — Concept Graph Engine
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/hero-light.svg">
+    <img src="docs/assets/readme/hero-light.svg" alt="Notes, meetings, AI coding sessions, code and any agent feed one Brahmastra knowledge graph, which Claude Code, Cursor, any MCP client and your own agents read and write over MCP, on any device." width="100%">
+  </picture>
+</p>
 
-A production-ready **hybrid Python + Next.js knowledge graph system** that extracts semantic triples from unstructured notes, resolves entity ambiguity, and computes advanced graph algorithms (PageRank, Louvain clustering, contradiction detection, link prediction). Deployable as a web app, runnable via CLI, and accessible as an MCP server for Claude integration.
+<h1 align="center">Give your AI a memory.<br><em>Give your team a shared one.</em></h1>
 
-## Architecture Overview
+<p align="center">
+  Brahmastra is a persistent, shared knowledge graph for AI assistants and the teams that use them.<br>
+  Every assistant that speaks MCP reads and writes the same memory, on any device, for months,<br>
+  and every answer traces back to the sentence it came from.
+</p>
 
-**Full-stack hybrid deployment:**
-- **Python backend** (`backend/`): FastAPI server (port 8001) with SQLite persistence, Claude 3.5 Haiku extraction, sentence-transformers embeddings, networkx algorithms, Notion sync, MCP server, and Typer CLI.
-- **Next.js frontend** (`frontend/`): React app (port 3000) with d3-force graph visualization, real-time insight panels, entity detail drawer, precomputed graph caching.
-- **Orchestration**: Vercel `experimentalServices` (both services deployed together), with automatic API routing via `vercel.json`.
+<p align="center">
+  <b>Persistent</b> · months, not one chat &nbsp;·&nbsp;
+  <b>Shared</b> · every person, every device &nbsp;·&nbsp;
+  <b>Grounded</b> · every fact cited
+</p>
 
-## 12-Step Implementation (100% Complete)
+<div align="center">
 
-| Step | Module | Status | Key Features |
-|------|--------|--------|--------------|
-| 1 | Repo + scaffold | ✅ | FastAPI, vercel.json, Turbopack |
-| 2 | SQLite DB + CRUD | ✅ | 5 tables (notes, triples, canonical_map, clusters, cached_graph), index optimization |
-| 3 | Extraction agent | ✅ | Claude 3.5 Haiku, ontology-constrained JSON, confidence ≥ 0.4, incremental processing |
-| 4 | Entity resolution | ✅ | Union-Find with 4-tier heuristics + optional sentence-transformers embeddings |
-| 5 | Concept graph | ✅ | networkx MultiDiGraph, PageRank, Louvain, contradictions, link prediction |
-| 6 | Pipeline + CLI | ✅ | 5-stage orchestrator, Typer CLI with rich output, 398-line cli.py |
-| 7 | Notion sync | ✅ | Block-to-text extraction, change detection, incremental re-extraction |
-| 8 | MCP server | ✅ | Stdio transport, 6 tools (run_pipeline, get_graph_stats, search_entities, get_entity_details, get_contradictions, add_note) |
-| 9 | pytest suite | ✅ | 42 tests passing in 0.42s (DB, ontology, extraction, resolution, concept graph) |
-| 10 | Frontend integration | ✅ | Backend adapter, precomputed graph caching, "backend live" badge, fallback to seed data |
-| 11 | Extract persistence | ✅ | Frontend extract action POSTs notes+triples to backend, graceful fallback |
-| 12 | Tests + ontology | ✅ | test_pipeline.py (incremental mode), ontology.yaml (16 relations, 12 entity types) |
+![MCP](https://img.shields.io/badge/MCP-12%20tools-14BBC2?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.12-3572A5?style=flat-square)
+![Neo4j](https://img.shields.io/badge/graph-Neo4j-4581C3?style=flat-square)
+![Postgres](https://img.shields.io/badge/records-Postgres%20%2B%20pgvector-336791?style=flat-square)
+![Next.js](https://img.shields.io/badge/dashboard-Next.js-111111?style=flat-square)
+![Models](https://img.shields.io/badge/models-Groq%20%C2%B7%20OpenAI%20%C2%B7%20Anthropic%20%C2%B7%20Ollama-F2B036?style=flat-square)
 
-## Core Features
+</div>
 
-### Pipeline (5-Stage Orchestration)
+<p align="center">
+  <a href="docs/GETTING_STARTED.md"><b>Get started</b></a> &nbsp;·&nbsp;
+  <a href="docs/HOW_IT_WORKS.md"><b>How it works</b></a> &nbsp;·&nbsp;
+  <a href="#what-can-you-build"><b>Use cases</b></a> &nbsp;·&nbsp;
+  <a href="docs/README.md"><b>Documentation</b></a>
+</p>
 
-```
-Notion Database  →  [Stage 1: Sync]  →  SQLite notes
-                           ↓
-          [Stage 2: Extraction]  →  Claude 3.5 Haiku → ontology-validated triples
-                           ↓
-          [Stage 3: Resolution]  →  Union-Find + sentence-transformers → canonical entities
-                           ↓
-          [Stage 4: Build Graph]  →  networkx MultiDiGraph with PageRank/Louvain
-                           ↓
-          [Stage 5: Cache]  →  SQLite (fast serving to frontend)
-```
+<br>
 
-**All stages are:**
-- **Atomic** — full pipeline runs in ~2s on seed data (42 triples → 16 entities)
-- **Incremental** — `run_pipeline(full=False)` processes only `status='pending'` notes
-- **Resumable** — any stage failure leaves DB intact for retry
-- **Cached** — frontend receives precomputed result via `/api/graph`
+<h2 align="center">Get started</h2>
 
-### Dashboard
+<p align="center">Run the stack, connect your assistant over MCP, and it starts remembering.</p>
 
-- **Force-directed graph**: interactive pan/zoom, node color by Louvain cluster, size by PageRank
-- **Insight panels** (tabbed):
-  - **Central Entities** — PageRank leaderboard (most structurally important)
-  - **Concept Clusters** — Louvain communities with member lists
-  - **Contradictions** — conflicting functional facts with source quotes + dates
-  - **Predicted Links** — high-confidence recommendations (common-neighbors heuristic)
-  - **Entity Resolution** — raw mentions → canonical mapping with merge proofs
-  - **Notes** — vault browser, extract triples from new text on-the-fly
-- **Entity inspector** — click any node to see full in/out relations with provenance
-- **Backend status** — "backend live" badge when `/api/graph` is reachable, "run pipeline" button
-- **Graceful fallback** — if backend unavailable, loads 8-note seed vault (26 triples, 16 entities)
-
-### CLI
-
-```bash
-brahmastra run [--full]              # Extract all (incremental) or re-extract all (full=True)
-brahmastra sync                       # Sync from Notion (requires NOTION_TOKEN)
-brahmastra add-note <title>           # Interactive ingestion
-brahmastra show graph                 # Full graph stats
-brahmastra show nodes                 # Entity table with centrality scores
-brahmastra show clusters              # Louvain communities
-brahmastra show contradictions        # Temporal conflicts
-brahmastra show predicted-links       # Suggested connections
-brahmastra show notes                 # Vault + extraction status
+```sh
+git clone https://github.com/ShaanKapoor10/vaultgraph-qy.git && cd vaultgraph-qy
+echo "GROQ_API_KEY=your-groq-key"     > .env
+echo "BRAHMASTRA_ALLOW_ANONYMOUS=1"    >> .env   # local use only
+docker compose up -d --build        # dashboard on :3000, API on :8001
 ```
 
-### MCP Server
-
-Stdio-transport MCP for Claude integration:
-
-```
-brahmastra.mcp_server  → [Tool: run_pipeline] → full pipeline orchestration
-                       → [Tool: get_graph_stats] → current graph metrics
-                       → [Tool: search_entities(query)] → entity search
-                       → [Tool: get_entity_details(id)] → in/out relations + quotes
-                       → [Tool: get_contradictions] → temporal conflicts
-                       → [Tool: add_note(title, content)] → ingest knowledge
-```
-
-### Notion Sync
-
-- Reads Notion database (auth: `NOTION_TOKEN`, target: `NOTION_DATABASE_ID`)
-- Block-to-text extraction (paragraphs, headings, numbered/bulleted lists)
-- Change detection: skips pages with unchanged `last_edited_time`
-- Auto-marks changed pages as `extraction_status='pending'`
-- Fully integrated: `run_pipeline()` runs sync first if token is set
-
-## Project Structure
-
-```
-brahmastra/
-├── backend/
-│   ├── brahmastra/
-│   │   ├── db.py                     # SQLite CRUD (5 tables, 20 helpers)
-│   │   ├── ontology.py               # 16 relations, 12 entity types, validation
-│   │   ├── extraction.py             # Claude 3.5 Haiku agent (187 lines)
-│   │   ├── entity_resolution.py      # Union-Find + sentence-transformers (297 lines)
-│   │   ├── concept_graph.py          # networkx algorithms (332 lines)
-│   │   ├── pipeline.py               # 5-stage orchestrator (73 lines)
-│   │   ├── cli.py                    # Typer CLI with rich output (425 lines)
-│   │   ├── sync.py                   # Notion sync (214 lines)
-│   │   ├── mcp_server.py             # MCP server stdio transport (334 lines)
-│   │   └── routers/
-│   │       ├── __init__.py
-│   │       ├── notes.py              # POST/GET /notes
-│   │       ├── graph.py              # GET /graph, POST /graph/triples
-│   │       └── pipeline.py           # POST /pipeline/run
-│   ├── main.py                       # FastAPI app (lifespan, CORS, integration)
-│   ├── tests/
-│   │   ├── __init__.py
-│   │   ├── test_db.py                # DB CRUD + schema
-│   │   ├── test_ontology.py          # Validation logic
-│   │   ├── test_entity_resolution.py # Union-Find + heuristics
-│   │   ├── test_extraction.py        # LLM mocking (5 tests)
-│   │   ├── test_concept_graph.py     # Algorithms (PageRank, Louvain, etc.)
-│   │   └── test_pipeline.py          # Incremental mode + Notion skip
-│   ├── data/                         # SQLite DB (gitignored)
-│   ├── .venv/                        # Python 3.13 virtualenv
-│   ├── pyproject.toml                # 23 deps, [project.scripts] entrypoint
-│   └── requirements.txt              # pinned deps
-│
-├── frontend/
-│   ├── app/
-│   │   ├── page.tsx                  # Loads notes + graph from backend
-│   │   ├── layout.tsx                # Dark theme, Geist fonts
-│   │   └── actions/
-│   │       └── extract.ts            # Claude via AI Gateway + backend persist
-│   ├── components/
-│   │   ├── dashboard.tsx             # Main layout + state
-│   │   ├── graph-view.tsx            # d3-force SVG visualization
-│   │   ├── entity-detail.tsx         # Drawer with relations + quotes
-│   │   └── panels/
-│   │       ├── central-entities.tsx
-│   │       ├── concept-clusters.tsx
-│   │       ├── contradictions.tsx
-│   │       ├── predicted-links.tsx
-│   │       ├── entity-resolution.tsx
-│   │       └── notes-panel.tsx
-│   ├── lib/
-│   │   ├── backend-adapter.ts        # Python → React type conversion
-│   │   ├── ontology.ts               # Relation + entity types
-│   │   ├── types.ts                  # TypeScript interfaces
-│   │   ├── pipeline.ts               # Client-side fallback engine
-│   │   ├── sample-notes.ts           # 8 notes + 26 triples
-│   │   └── viz.ts                    # d3 helpers + colors
-│   └── next.config.mjs               # API rewrites to backend
-│
-├── docs/                             # All guides — start at docs/START_HERE.md
-│   ├── START_HERE.md                 # Entry point: pick a path by goal
-│   ├── DOCUMENTATION_INDEX.md        # Full index of every doc
-│   ├── QUICK_START.md                # Get it running
-│   ├── DETAILED_ARCHITECTURE.md      # How the pipeline works
-│   └── ...                           # Integration + agent guides
-│
-├── ontology.yaml                     # Domain spec (16 relations, 12 types, validation)
-├── vercel.json                       # experimentalServices config
-├── README.md                         # This file
-└── .gitignore
+```json
+{
+  "mcpServers": {
+    "brahmastra": {
+      "command": "/path/to/vaultgraph-qy/backend/.venv/bin/python",
+      "args": ["-m", "brahmastra.mcp_server"],
+      "cwd": "/path/to/vaultgraph-qy/backend"
+    }
+  }
+}
 ```
 
-## Database Schema
+<p align="center">
+  Add the MCP server to your assistant, and it has <code>brahmastra_add_note</code> to remember and <code>brahmastra_search_notes</code> to recall,<br>
+  plus ten more tools for entities, contradictions, code, past sessions and workspaces.<br>
+  <a href="docs/GETTING_STARTED.md"><b>Full setup guide →</b></a>
+</p>
 
-### `notes` (SQLite)
-```sql
-CREATE TABLE notes (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  last_edited TEXT,               -- ISO 8601, from Notion
-  last_synced TEXT,               -- ISO 8601
-  extraction_status TEXT NOT NULL  -- 'pending' | 'done' | 'error'
-);
-```
+<br><br>
 
-### `triples` (SQLite)
-```sql
-CREATE TABLE triples (
-  id INTEGER PRIMARY KEY,
-  subject_text TEXT NOT NULL,
-  subject_type TEXT NOT NULL,     -- ontology entity type
-  relation TEXT NOT NULL,         -- ontology relation
-  object_text TEXT NOT NULL,
-  object_type TEXT NOT NULL,
-  confidence REAL NOT NULL,       -- 0.0–1.0 (filtered at ≥0.4)
-  source_quote TEXT,              -- exact phrase from note
-  source_note_id TEXT,            -- FK: notes.id
-  extracted_at TEXT NOT NULL      -- ISO 8601
-);
-```
+<h2 align="center">Why <em>Brahmastra?</em></h2>
 
-### `canonical_map` (SQLite)
-```sql
-CREATE TABLE canonical_map (
-  mention_text TEXT PRIMARY KEY,  -- raw mention from LLM
-  canonical_text TEXT NOT NULL    -- Union-Find output
-);
-```
+<p align="center">
+  Your assistants are only as good as what they remember.<br>
+  Chats end, context windows fill, and decisions scatter across tools and people.<br>
+  Brahmastra keeps all of it: connected, current and cited.
+</p>
 
-### `entity_clusters` (SQLite)
-```sql
-CREATE TABLE entity_clusters (
-  entity_id TEXT NOT NULL,        -- canonical entity
-  cluster_id INTEGER NOT NULL,    -- Louvain cluster ID
-  PRIMARY KEY (entity_id, cluster_id)
-);
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/why-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/why-light.svg">
+    <img src="docs/assets/readme/why-light.svg" alt="Remembers for months. One brain, every device. Every fact has a source. Honest about doubt." width="100%">
+  </picture>
+</p>
 
-### `cached_graph` (SQLite)
-```sql
-CREATE TABLE cached_graph (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  graph_json TEXT NOT NULL,       -- JSON serialized graph
-  stats_json TEXT NOT NULL,       -- PageRank, Louvain, contradictions, predictions
-  built_at TEXT NOT NULL          -- ISO 8601
-);
-```
+<br><br>
 
-## Getting Started
+<h2 align="center">One brain, <em>every capability</em></h2>
 
-### Local Development
+<p align="center">
+  Everything your assistants learn becomes part of one knowledge graph,<br>
+  with the tools to keep it clean, current and searchable.
+</p>
 
-**1. Start Python backend:**
-```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-uv pip install -e .
-uvicorn main:app --reload --port 8001
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/features-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/features-light.svg">
+    <img src="docs/assets/readme/features-light.svg" alt="Twelve capabilities: knowledge graph, entity resolution, contradiction detection, hybrid search, graph-first answers, meeting intelligence, session memory, code index, workspaces, Notion sync, secure defaults and diagnostics." width="100%">
+  </picture>
+</p>
 
-**2. In another terminal, start Next.js frontend:**
-```bash
-cd frontend
-pnpm install
-pnpm dev  # opens http://localhost:3000
-```
+<br><br>
 
-**3. Try the CLI:**
-```bash
-# Backend still running in first terminal
-cd backend
-source .venv/bin/activate
-brahmastra run --full           # Extract all notes
-brahmastra show graph           # Print stats to terminal
-brahmastra show contradictions
-```
+<h2 align="center">How it <em>works</em></h2>
 
-### Vercel Deployment
+<p align="center">
+  Write in plain language. Brahmastra does the linking.<br>
+  Every note flows through an incremental pipeline, so only what changed is processed again.
+</p>
 
-```bash
-# Push to connected GitHub repo
-git push
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/pipeline-light.svg">
+    <img src="docs/assets/readme/pipeline-light.svg" alt="A note flows through sync, extract, resolve, build graph, summarise, cache and write back, becoming quoted facts, one resolved person, a graph and a topic summary." width="100%">
+  </picture>
+</p>
 
-# Vercel auto-detects:
-# - experimentalServices in vercel.json
-# - Creates Python backend service + Next.js service
-# - Sets environment vars (ANTHROPIC_API_KEY if configured)
-```
+<p align="center"><a href="docs/HOW_IT_WORKS.md"><b>See the architecture →</b></a></p>
 
-### Notion Integration
+<br><br>
 
-Set environment variables:
+<h2 align="center">Built for <em>real-world knowledge</em></h2>
 
-```bash
-NOTION_TOKEN=secret_xxx  # From Notion integrations page
-NOTION_DATABASE_ID=xyz   # Notion DB ID
-```
+<p align="center">Real notes are messy. People use nicknames, plans change, and the important detail was said aloud in a meeting.</p>
 
-Then run:
+<br>
 
-```bash
-brahmastra sync           # Imports changed pages to SQLite
-brahmastra run --full     # Extracts all notes
-```
+<h3 align="center">One person, <em>many names.</em></h3>
 
-### MCP Server Setup
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/resolution-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/resolution-light.svg">
+    <img src="docs/assets/readme/resolution-light.svg" alt="Sarah, Sarah K. and Sarah Khan merge into one entity, while look-alikes such as a product and its v3 release are kept apart." width="100%">
+  </picture>
+</p>
 
-Build and configure for Claude:
+<p align="center">
+  Spelling, initials, acronyms and meaning bring every mention of the same thing together,<br>
+  while safeguards keep look-alikes apart. Names stay stable as your knowledge grows.
+</p>
 
-```bash
-# Build the MCP server config
-python -m brahmastra.mcp_server > /tmp/brahmastra_mcp.json
+<br>
 
-# In Claude (or other MCP client), add stdio connection:
-# Command: python -m brahmastra.mcp_server
-# Arguments: (none)
-```
+<h3 align="center">Plans change. <em>The graph keeps up.</em></h3>
 
-## Configuration
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/contradiction-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/contradiction-light.svg">
+    <img src="docs/assets/readme/contradiction-light.svg" alt="A planning doc says May 28; a later standup says June 10. The conflict is detected and the newer note wins." width="100%">
+  </picture>
+</p>
 
-### Environment Variables
+<p align="center">
+  When two notes disagree on an owner, a status, a date, a place or an employer, the conflict is surfaced<br>
+  and resolved to the most recent note. The older value stays as evidence, never silently lost.
+</p>
 
-**Required:**
-- `ANTHROPIC_API_KEY` — Claude access (extraction + frontend AI Gateway)
+<br>
 
-**Optional:**
-- `NOTION_TOKEN` — Notion auth token
-- `NOTION_DATABASE_ID` — Which Notion DB to sync
-- `BRAHMASTRA_DB` — SQLite path (default: `backend/data/concept_graph.db`)
-- `BACKEND_URL` — For frontend API calls (default: auto-routed on Vercel, `http://localhost:8001` in dev)
+<h3 align="center">Meetings that <em>remember themselves.</em></h3>
 
-### Ontology (10 Relations)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/meetings-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/meetings-light.svg">
+    <img src="docs/assets/readme/meetings-light.svg" alt="Transcript lines become a decision, an action item with its status, and a risk, each tied to its speaker and the meeting." width="100%">
+  </picture>
+</p>
 
-From `ontology.yaml`:
+<p align="center">
+  Drop in a transcript from Teams, Zoom or any recorder, as a meeting or a lecture.<br>
+  Decisions, action items, risks and open questions come out attributed, timestamped and quoted,<br>
+  and task status updates itself from what was said later.
+</p>
 
-| Relation | Domain | Range | Functional | Example |
-|----------|--------|-------|------------|---------|
-| `reports_to` | person | person | ✓ | Alice reports to Bob |
-| `owns` | person | project/entity | ✗ | Sarah owns auth migration |
-| `depends_on` | project | project | ✗ | Search depends on auth |
-| `scheduled_for` | project/entity | date | ✓ | Auth migration: March 15 |
-| `has_status` | project/entity | status | ✓ | Project is in progress |
-| `related_to` | entity | entity | ✗ | Microservices ↔ scalability |
-| `located_in` | person/org | location | ✓ | Team in San Francisco |
-| `uses` | person/project | tech/service | ✗ | We use PostgreSQL |
-| `created_by` | doc/project | person | ✗ | RFC by Priya |
-| `mentions` | doc | entity | ✗ | Note mentions consensus |
+<br>
 
-**Functional relations** → one value per subject = enables contradiction detection.
+<h3 align="center">Answers from the graph, <em>not guesses.</em></h3>
 
-## Testing
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/ask-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/ask-light.svg">
+    <img src="docs/assets/readme/ask-light.svg" alt="Questions are answered from the graph first; only if the graph has nothing are transcript passages read, and the answer says so." width="100%">
+  </picture>
+</p>
 
-**Python backend (pytest):**
-```bash
-cd backend && source .venv/bin/activate && python -m pytest tests/ -v
-# 44 tests pass in 0.42s
-# Coverage: db.py, ontology.py, entity_resolution.py, concept_graph.py, pipeline.py
-```
+<p align="center">
+  Ask in plain language. Answers come from the graph with their sources, following connections across several hops.<br>
+  When only the raw transcript holds the answer, Brahmastra still answers, and tells you where it looked.
+</p>
 
-**Frontend (TypeScript):**
-```bash
-cd frontend && pnpm exec tsc --noEmit  # Type-check
-# No failing tests currently (pure algorithms + UI)
-```
+<br>
 
-## Troubleshooting
+<h3 align="center">No session <em>left behind.</em></h3>
 
-| Issue | Fix |
-|-------|-----|
-| Backend won't start | `python3 --version` (need 3.11+), check port 8001 free, `uv pip install -e backend` |
-| Frontend can't reach backend | Dev: check `next.config.mjs` rewrites, backend on 8001. Vercel: check `vercel.json` experimentalServices |
-| No triples extracted | Check `ANTHROPIC_API_KEY` set, sample note has ~100+ words, check `backend/data/concept_graph.db` exists |
-| Notion sync fails | Check `NOTION_TOKEN` + `NOTION_DATABASE_ID` both set, DB shares with auth email, `last_edited_time` recent |
-| "backend live" badge doesn't appear | Check `/api/health` responds (in browser devtools Network tab) |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/checkpoint-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/checkpoint-light.svg">
+    <img src="docs/assets/readme/checkpoint-light.svg" alt="Each AI session is captured safely to disk, distilled into a note and verified before it is stored; the raw conversation is indexed alongside." width="100%">
+  </picture>
+</p>
 
-## Performance Notes
+<p align="center">
+  Claude Code sessions are captured automatically, even when a conversation ends or compacts.<br>
+  Each one is distilled into a verified note, and the full conversation stays searchable, word for word.
+</p>
 
-- **Extraction**: Claude 3.5 Haiku ~0.5s per note (vs 3+ for larger models)
-- **Entity resolution**: 42 triples → 16 entities in ~50ms (Union-Find + heuristics)
-- **Concept graph**: PageRank + Louvain on 16 nodes in ~10ms
-- **Full pipeline**: 42 triples → final graph in ~2s end-to-end
-- **Notion sync**: ~100 pages in ~5s (depends on Notion API)
+<br><br>
 
-## Deployment Checklist
+<h2 align="center" id="what-can-you-build">What can you <em>build?</em></h2>
 
-- [ ] GitHub repo connected to v0
-- [ ] `ANTHROPIC_API_KEY` added to Vercel project vars
-- [ ] `vercel.json` has correct `experimentalServices` config
-- [ ] Backend `pyproject.toml` has all deps pinned
-- [ ] Frontend `package.json` has `ai` + `zod` + `d3-force`
-- [ ] `backend/data/` in `.gitignore` (SQLite logs)
-- [ ] Test suite passing locally: `pytest tests/ -v` (backend) + `tsc --noEmit` (frontend)
-- [ ] Push to main branch → auto-deploy to Vercel
+<p align="center">One memory, many ways to use it.</p>
 
-## What's Implemented vs. Left
+<p align="center">
+  <a href="docs/GETTING_STARTED.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-shared-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-shared-light.svg"><img src="docs/assets/readme/card-shared-light.svg" alt="Shared team memory: every assistant on the team reads one memory." width="49%"></picture></a>
+  <a href="docs/HOW_IT_WORKS.md#meetings-and-lectures"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-meetings-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-meetings-light.svg"><img src="docs/assets/readme/card-meetings-light.svg" alt="Meetings to knowledge: decisions, owners, risks and tasks, each one quoted." width="49%"></picture></a>
+</p>
 
-### ✅ Complete (12 steps)
+<p align="center">
+  <a href="docs/HOW_IT_WORKS.md#answering-questions"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-onboarding-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-onboarding-light.svg"><img src="docs/assets/readme/card-onboarding-light.svg" alt="Onboarding: new hires ask why, and get the decision behind it." width="49%"></picture></a>
+  <a href="docs/HOW_IT_WORKS.md#the-pipeline-stage-by-stage"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-decisions-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-decisions-light.svg"><img src="docs/assets/readme/card-decisions-light.svg" alt="Decision log: when plans change, the newest fact wins." width="49%"></picture></a>
+</p>
 
-- Full Python + Next.js hybrid stack
-- 5-stage production pipeline (sync → extract → resolve → graph → cache)
-- Entity resolution with Union-Find + 4-tier heuristics + optional embeddings
-- PageRank, Louvain clustering, contradiction detection, link prediction
-- Notion database sync with change detection
-- MCP server for Claude integration
-- Full test coverage (42 tests, 0.42s)
-- Interactive dashboard with d3 force graph
-- Graceful fallback to seed data
-- Ontology spec (16 relations, 12 types, validation rules)
+<p align="center">
+  <a href="docs/HOW_IT_WORKS.md#capturing-what-ai-sessions-learn"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-code-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-code-light.svg"><img src="docs/assets/readme/card-code-light.svg" alt="Codebase memory: your agent knows where code lives and why it changed." width="49%"></picture></a>
+  <a href="docs/HOW_IT_WORKS.md#the-pipeline-stage-by-stage"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/card-notion-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/card-notion-light.svg"><img src="docs/assets/readme/card-notion-light.svg" alt="Notion with a brain: write in Notion, and insights write themselves back." width="49%"></picture></a>
+</p>
 
-### 🔜 Natural next steps
+<br><br>
 
-- **User auth** — multi-user support with Better Auth on Neon
-- **Real-time** — WebSocket subscriptions to graph changes
-- **Advanced queries** — shortest-path, pattern matching, SPARQL DSL
-- **Performance scaling** — Postgres indices for 1M+ triples, caching layers
-- **Monitoring** — Sentry error tracking, performance metrics
-- **Custom embeddings** — fine-tune sentence-transformers on domain corpus
+<h2 align="center">Ready for <em>production</em></h2>
 
-## Tech Stack Summary
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/storage-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/storage-light.svg">
+    <img src="docs/assets/readme/storage-light.svg" alt="Notes live in Postgres as the system of record; the graph in Neo4j is rebuilt from them at any time." width="100%">
+  </picture>
+</p>
 
-| Concern | Technology |
-|---------|------------|
-| Python backend | FastAPI, uvicorn, SQLite, Anthropic SDK, networkx |
-| Entity resolution | Union-Find, Jaro-Winkler, sentence-transformers |
-| Graph algorithms | PageRank, Louvain, contradiction detection, link prediction (all from scratch) |
-| Notion integration | notion-client, MCP server |
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
-| Visualization | d3-force (SVG), categorical colors |
-| Testing | pytest (backend), TypeScript type-check (frontend) |
-| Package management | uv (backend), pnpm (frontend) |
-| Deployment | Vercel experimentalServices |
+<h3 align="center">Your data, <em>your servers, your model.</em></h3>
+<p align="center">
+  Self-host the whole stack. Choose Groq, OpenAI, Anthropic, Gemini or a local Ollama model with a single setting.<br>
+  Run a local model, and nothing leaves your infrastructure at all.
+</p>
 
-## License & Attribution
+<h3 align="center">A system of record, <em>kept separate.</em></h3>
+<p align="center">
+  Notes live in Postgres with hybrid search. The graph is derived from them and can be rebuilt at any time,<br>
+  and every derived record is owned, so edits and deletions propagate cleanly.
+</p>
 
-Built by v0 (Vercel AI). See `backend/pyproject.toml` for dependency licenses.
+<h3 align="center">Isolated <em>by design.</em></h3>
+<p align="center">
+  Workspaces give each team, project or person a separate graph,<br>
+  with isolation enforced in three independent layers, so a forgotten filter can never leak data.
+</p>
 
----
+<h3 align="center">Secure <em>by default.</em></h3>
+<p align="center">
+  The API requires a key unless you explicitly open it for local use.<br>
+  Secrets are redacted before anything is indexed, and API keys are never returned in full.
+</p>
 
-**Quick links:**
-- Backend API docs: `http://localhost:8001/docs` (FastAPI Swagger UI)
-- Frontend: `http://localhost:3000`
-- CLI help: `brahmastra --help`
-- Ontology spec: `ontology.yaml`
+<h3 align="center">Observable <em>end to end.</em></h3>
+<p align="center">
+  A diagnostics view shows what is queued, what failed and whether it will recover, with one-click fixes.<br>
+  Health probes, live pipeline status and running-version checks are built in.
+</p>
 
+<br><br>
+
+<h2 align="center">Works with <em>your stack</em></h2>
+
+<div align="center">
+
+| | |
+|:--|:--|
+| **Assistants** | Claude Code · Cursor · any MCP client · your own agents |
+| **Interfaces** | MCP (stdio or HTTP) · REST API · web dashboard |
+| **Models** | Groq · OpenAI · Anthropic · Gemini · Ollama |
+| **Storage** | Postgres + pgvector · Neo4j (Aura or self-hosted) · SQLite |
+| **Sources** | Notion · meeting transcripts (Teams VTT, SRT, text) · Claude Code sessions · Git repositories |
+| **Deploy** | Docker Compose · any container host with 1 GB of memory |
+
+</div>
+
+<br><br>
+
+<h2 align="center">Tools your assistant <em>gets</em></h2>
+
+<div align="center">
+
+| Tool | What it does |
+|:--|:--|
+| `brahmastra_search_notes` | Recall what was decided, fixed or learned about any topic |
+| `brahmastra_add_note` | Remember something, searchable immediately |
+| `brahmastra_search_entities` | Find a person, project or file and its connections |
+| `brahmastra_get_entity_details` | Everything about one entity, including where code is defined |
+| `brahmastra_search_sessions` | The exact words from past AI sessions |
+| `brahmastra_search_code` | Where something is implemented, by file and line |
+| `brahmastra_get_contradictions` | Where your knowledge disagrees, and which side is newer |
+| `brahmastra_get_graph_stats` | The shape of the graph: size, central entities, topics |
+| `brahmastra_run_pipeline` | Rebuild the graph, incrementally or in full |
+| `brahmastra_list_workspaces` | See every workspace |
+| `brahmastra_create_workspace` | Start a new, isolated graph |
+| `brahmastra_search_all_workspaces` | Search across workspaces, when you ask for it |
+
+</div>
+
+<br><br>
+
+<h2 align="center">Documentation</h2>
+
+<div align="center">
+
+| | |
+|:--|:--|
+| [Getting started](docs/GETTING_STARTED.md) | Install, connect your assistant, ingest your first meeting |
+| [How it works](docs/HOW_IT_WORKS.md) | The architecture, layer by layer |
+| [Deployment](docs/DEPLOYMENT.md) | Authentication, hosted Neo4j, MCP over HTTP, health probes |
+| [Platforms](docs/PLATFORMS.md) | Choosing where to host it |
+| [Roadmap](docs/ROADMAP.md) | What is coming next |
+| [All documentation](docs/README.md) | Design records for workspaces, the ontology, checkpointing and the data model |
+
+</div>
+
+<br><br>
+
+<p align="center">
+  <b>Brahmastra</b> · built by <b>Shaan Kapoor</b>
+</p>

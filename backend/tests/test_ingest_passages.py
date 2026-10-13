@@ -120,6 +120,28 @@ def test_the_transcript_is_read_only_when_the_graph_says_it_has_nothing(monkeypa
     assert out["source"] == "transcript" and out["passages"][0]["start_time"] == "00:01:34"
 
 
+def test_a_note_answers_when_the_graph_has_nothing_and_no_transcript_exists(monkeypatch):
+    from brahmastra import rag
+
+    _facts(monkeypatch, rag)
+    monkeypatch.setattr(rag, "_passages", lambda q: [])
+    monkeypatch.setattr(rag, "_fallback_notes", lambda q: [
+        {"id": "m1", "title": "Model choice", "content": "Extraction defaults to openai/gpt-oss-120b."}])
+    replies = iter([rag.NOT_IN_GRAPH, "openai/gpt-oss-120b [n:m1]."])
+    monkeypatch.setattr(rag, "chat", lambda system, user, **k: next(replies))
+    out = rag.local_search("Which model does extraction use?", nodes=[{"id": "x"}])
+    assert out["source"] == "notes" and "gpt-oss" in out["answer"]
+    assert [c["note_id"] for c in out["citations"]] == ["m1"]
+
+
+def test_the_note_fallback_can_be_switched_off(monkeypatch):
+    from brahmastra import rag
+
+    monkeypatch.setenv("RAG_NOTE_FALLBACK", "0")
+    monkeypatch.setattr(rag.db, "search_notes", lambda q, limit=6: pytest.fail("notes read"))
+    assert rag._fallback_notes("anything") == []
+
+
 def test_a_question_naming_no_entity_finds_a_statement_by_meaning(monkeypatch):
     from brahmastra import embeddings, rag
 

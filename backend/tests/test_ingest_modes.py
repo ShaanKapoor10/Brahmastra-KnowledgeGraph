@@ -314,3 +314,13 @@ def test_two_notes_readings_are_the_default(monkeypatch):
 
     monkeypatch.delenv("INGEST_NOTES_READINGS", raising=False)
     assert notes_readings() == 2
+
+
+def test_a_conversation_reads_only_notes_and_keeps_points(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(comprehend, "_cached_chat", _fake({"take notes": NOTES}, seen))
+    u = SessionReader("conversation")(segment(LECTURE)[0])
+    assert {a.kind for a in u.artifacts} == {"point"}
+    assert u.calls == 1
+    assert all("take notes" in system for system, _ in seen)
+    assert modes.get_mode("conversation").points_kind == "point"

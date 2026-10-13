@@ -92,6 +92,19 @@ MODES: dict[str, Mode] = {
         points_label="What was taught",
         examples=("class", "training", "webinar", "walkthrough", "demo"),
     ),
+    # Long-running personal or working conversations -- the memory an assistant
+    # needs about the people it talks to: what happened to them, what they plan,
+    # prefer and feel, and when. Only the notes pass runs: nobody is deciding or
+    # teaching, so meeting and audience passes would only find noise.
+    "conversation": Mode(
+        id="conversation",
+        label="Conversation",
+        description="People talking over time: what happened to them, their plans, preferences and relationships, with dates.",
+        kinds=(Kind("point", "What was said", "said by"),),
+        points_kind="point",
+        points_label="What was said",
+        examples=("chat history", "1:1", "check-in", "support thread"),
+    ),
 }
 
 

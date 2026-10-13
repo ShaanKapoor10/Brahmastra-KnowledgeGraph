@@ -28,7 +28,7 @@ interface AskResult {
    * which also means extraction missed it. "none": nothing answered it.
    * Absent on global (cluster summary) answers.
    */
-  source?: "graph" | "transcript" | "none"
+  source?: "graph" | "notes" | "transcript" | "none"
   passages?: Passage[]
 }
 
@@ -37,6 +37,14 @@ const SOURCE: Record<string, { label: string; title: string; cls: string; Icon: 
     label: "from the graph",
     title: "Answered from facts and statements in the knowledge graph.",
     cls: "border-green-500/30 bg-green-500/10 text-green-400",
+    Icon: Network,
+  },
+  notes: {
+    label: "from your notes, not in the graph yet",
+    title:
+      "The graph had no answer, so this was read from the notes themselves. " +
+      "That also means extraction missed it.",
+    cls: "border-sky-500/30 bg-sky-500/10 text-sky-400",
     Icon: Network,
   },
   transcript: {
