@@ -105,4 +105,7 @@ sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','
 # pipeline lock is per store, not per process. Scale out only with
 # GRAPH_BACKEND=neo4j, and raise WEB_CONCURRENCY there.
 ENV WEB_CONCURRENCY=1
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1}"]
+# The production safety check runs first, as its own step, so an unsafe
+# configuration ends the container with a readable list and exit code 78
+# (EX_CONFIG) rather than a traceback from inside uvicorn's startup.
+CMD ["sh", "-c", "python -m brahmastra.preflight --enforce && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1}"]

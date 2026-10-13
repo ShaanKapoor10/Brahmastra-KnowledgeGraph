@@ -1,0 +1,58 @@
+# The only public entry point. Caddy obtains and renews TLS certificates
+# itself (Let's Encrypt, or its own CA when CADDY_TLS=internal for a test
+# install) and redirects HTTP to HTTPS.
+#
+#   https://DOMAIN/            the dashboard
+#   https://DOMAIN/v1/...      the API, for personal tokens, scripts and remote MCP
+#                              (https://DOMAIN/v1/mcp when MCP_HTTP=1)
+#   https://DOMAIN/healthz     up/down for an uptime monitor; no details
+
+{
+	# Admin API off: nothing should reconfigure the edge at runtime.
+	admin off
+}
+
+{$DOMAIN} {
+	tls {$CADDY_TLS}
+
+	encode zstd gzip
+
+	header {
+		# One year, only once HTTPS is known to work for the whole domain.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+		-Via
+	}
+
+	handle /healthz {
+		rewrite * /health/uptime
+		reverse_proxy backend:8001
+	}
+
+	handle_path /v1/* {
+		# /health and /health/ready describe the deployment (backends, auth
+		# mode, counts). Operators read them from inside; the internet gets /healthz.
+		@internal path /health /health/*
+		respond @internal 404
+
+		# Request bodies: notes and transcripts are text. 25 MB is generous.
+		request_body {
+			max_size 25MB
+		}
+		reverse_proxy backend:8001
+	}
+
+	handle {
+		request_body {
+			max_size 25MB
+		}
+		reverse_proxy frontend:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

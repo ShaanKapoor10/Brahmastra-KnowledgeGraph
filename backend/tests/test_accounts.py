@@ -249,3 +249,19 @@ def test_responses_carry_security_headers_and_no_open_cors(make_app):
     r = client.get("/notes", headers={"Origin": "https://evil.example"})
     assert r.headers["x-frame-options"] == "DENY" and r.headers["x-content-type-options"] == "nosniff"
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_the_uptime_check_is_open_and_says_nothing_but_up_or_down(make_app):
+    client = make_app()                        # unconfigured: everything else is 503
+    r = client.get("/health/uptime")
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+
+def test_the_cli_can_create_an_admin_from_stdin_for_automation(make_app, monkeypatch, capsys):
+    make_app()
+    import io
+    from brahmastra import accounts
+    monkeypatch.setattr("sys.stdin", io.StringIO(PW + "\n"))
+    assert accounts.main(["create-admin", "--email", "ops@example.com", "--password-stdin"]) == 0
+    assert PW not in capsys.readouterr().out
+    assert _store().find_user("ops@example.com")["role"] == "admin"

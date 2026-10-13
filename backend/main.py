@@ -79,6 +79,11 @@ async def lifespan(app: FastAPI):
     which reads like an MCP bug rather than a wiring mistake. The session
     manager has to be entered here, by the app that actually owns the lifespan.
     """
+    # Before anything else: a production install with unsafe settings must not
+    # come up at all (brahmastra/preflight.py). No-op outside production.
+    from brahmastra import preflight
+
+    preflight.check()
     _try_init_db()
     if _mcp_http_enabled():
         from brahmastra.mcp_server import mcp as _mcp
@@ -230,6 +235,37 @@ async def health() -> dict[str, Any]:
     # database -- so it stays inside the liveness probe. See version.py for the
     # two ways this system has run stale code without anything noticing.
     return {"status": "ok", "service": "brahmastra", "code": version.status()}
+
+
+@app.get("/health/uptime")
+async def uptime(response: Response) -> dict[str, str]:
+    """
+    For an external uptime monitor (UptimeRobot, Better Stack, a status page).
+
+    The public edge exposes this and nothing else from /health: it says only
+    whether the service works, end to end, through both stores. /health/ready
+    also names the backends, the auth mode and the note count -- useful to an
+    operator, a free reconnaissance report to anyone else.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+
+    def probe() -> bool:
+        from brahmastra import db
+
+        if not _schema_ready and _try_init_db() is not None:
+            return False
+        db.get_db_stats()
+        return True
+
+    try:
+        ok = await asyncio.wait_for(loop.run_in_executor(None, probe), timeout=8)
+    except Exception:                                    # noqa: BLE001
+        ok = False
+    if not ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": "ok" if ok else "unavailable"}
 
 
 @app.get("/health/ready")

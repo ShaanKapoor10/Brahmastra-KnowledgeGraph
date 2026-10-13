@@ -23,6 +23,7 @@ backend/.env
 # ...but the TEMPLATE must, or nobody deploying knows which keys exist.
 # The negation has to come after the pattern that excluded it.
 !.env.example
+!deploy/.env.production.example
 
 # vercel
 .vercel

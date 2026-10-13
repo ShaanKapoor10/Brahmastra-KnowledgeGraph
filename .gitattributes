@@ -1,0 +1,9 @@
+# Shell scripts and container files run on Linux; a CRLF line ending turns
+# "bash\r" into a command that does not exist. Pin LF whatever the checkout's
+# core.autocrlf says.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Caddyfile       text eol=lf
+deploy/**       text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf

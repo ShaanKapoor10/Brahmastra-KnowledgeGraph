@@ -1,0 +1,276 @@
+# Brahmastra -- production deployment, for any host that runs Docker.
+#
+#   cd deploy && ./setup.sh              first install (idempotent)
+#   ./upgrade.sh 0.3.0                   upgrade with backup + automatic rollback
+#
+# Every value comes from deploy/.env.production (see .env.production.example);
+# nothing here is specific to one organisation.
+#
+# NETWORKS. Two, so the databases can never be reached from outside:
+#
+#   edge      ordinary bridge: Caddy, the dashboard, and the containers that need
+#             OUTBOUND internet (backend for LLM APIs and Notion, backup for S3).
+#   internal  `internal: true`: no route to the outside at all, in or out.
+#             Postgres and Neo4j are ONLY here, with no published ports.
+#
+#   Only Caddy publishes ports (80/443). Everything else is reachable only
+#   through it, or not at all.
+#
+# HARDENING (CIS Docker Benchmark 5.x): every service drops all Linux
+# capabilities and adds back only what its entrypoint needs, sets
+# no-new-privileges, has a memory limit and a restart policy, and keeps /tmp on
+# tmpfs. The app containers (backend, frontend, Caddy) also run with a
+# read-only root filesystem. Postgres and Neo4j keep a writable root because
+# their entrypoints generate config at start; their data is on volumes.
+#
+# VERSIONS. Every image is pinned. The app images are tagged with
+# BRAHMASTRA_VERSION and the file refuses to start without it -- never :latest,
+# so a restart can never silently change what is running.
+
+name: brahmastra
+
+x-logging: &logging
+  # Rotate container logs, or a busy instance fills the disk.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging: *logging
+
+x-app-env: &app-env
+  BRAHMASTRA_ENV: production
+  BRAHMASTRA_VERSION: ${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION in .env.production}
+  PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+  GRAPH_BACKEND: neo4j
+  NOTE_BACKEND: postgres
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: brahmastra
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  POSTGRES_DB: brahmastra
+  NEO4J_URI: neo4j://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+  NEO4J_ENCRYPTED: "0"
+  BRAHMASTRA_DB: /data/concept_graph.db
+  BRAHMASTRA_DATA_DIR: /data
+  BRAHMASTRA_CHECKPOINT_DIR: /data/checkpoints
+  BRAHMASTRA_WORKSPACE: ${BRAHMASTRA_WORKSPACE:-default}
+  LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+  GROQ_API_KEYS: ${GROQ_API_KEYS:-}
+  GROQ_MODEL: ${GROQ_MODEL:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  NOTION_TOKEN: ${NOTION_TOKEN:-}
+  NOTION_DATABASE_ID: ${NOTION_DATABASE_ID:-}
+  BRAHMASTRA_API_KEY: ${BRAHMASTRA_API_KEY:-}
+  BRAHMASTRA_SETUP_TOKEN: ${BRAHMASTRA_SETUP_TOKEN:-}
+  BRAHMASTRA_KEY_ADMIN: ${BRAHMASTRA_KEY_ADMIN:-}
+  RATE_LIMITS: ${RATE_LIMITS:-}
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+
+services:
+  caddy:
+    <<: *hardening
+    image: caddy:2.8.4-alpine
+    # Binding 80/443 is the one privilege the edge needs.
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+      CADDY_TLS: ${CADDY_TLS:?set CADDY_TLS to your ACME email, or "internal" for a test install}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data           # certificates: keep them, or Let's Encrypt rate-limits re-issuing
+      - caddy-config:/config
+    tmpfs: ["/tmp:size=64m"]
+    networks: [edge]
+    mem_limit: 256m
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  frontend:
+    <<: *hardening
+    image: brahmastra-frontend:${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION}
+    build:
+      context: ../frontend
+    read_only: true
+    environment:
+      BRAHMASTRA_ENV: production
+      BACKEND_URL: http://backend:8001
+    tmpfs: ["/tmp:size=64m", "/app/.next/cache:size=128m,uid=10001"]
+    networks: [edge, internal]
+    mem_limit: 512m
+    depends_on:
+      backend:
+        condition: service_started
+
+  backend:
+    <<: *hardening
+    image: brahmastra-backend:${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION}
+    build:
+      context: ../backend
+    read_only: true
+    environment:
+      <<: *app-env
+      # Caddy is the only thing in front of this, and it sets X-Forwarded-For
+      # from the real client; login lockout counts per address.
+      TRUST_PROXY_HEADERS: "1"
+      CORS_ORIGINS: ""
+      MCP_HTTP: ${MCP_HTTP:-}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    volumes:
+      - brahmastra-data:/data
+    tmpfs: ["/tmp:size=256m"]
+    # edge for OUTBOUND only (LLM providers, Notion); it publishes nothing.
+    networks: [edge, internal]
+    mem_limit: ${BACKEND_MEMORY:-2g}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+
+  postgres:
+    <<: *hardening
+    image: pgvector/pgvector:0.8.0-pg17
+    # The entrypoint fixes data-directory ownership as root, then drops to the
+    # postgres user; these are exactly the capabilities that needs.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    environment:
+      POSTGRES_USER: brahmastra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: brahmastra
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    tmpfs: ["/tmp:size=128m", "/var/run/postgresql:size=16m"]
+    networks: [internal]
+    mem_limit: ${POSTGRES_MEMORY:-1g}
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brahmastra -d brahmastra"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  neo4j:
+    <<: *hardening
+    image: neo4j:5.26.2-community
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+      # Explicit memory, so the JVM sizes itself to this container rather than
+      # to the host, and so heap + page cache + overhead fit inside mem_limit.
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP:-512m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-512m}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512m}
+      NEO4J_PLUGINS: '[]'
+      # Not NEO4J_*: the image turns every NEO4J_ variable into a server setting.
+      HEALTHCHECK_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    tmpfs: ["/tmp:size=128m"]
+    networks: [internal]
+    mem_limit: ${NEO4J_MEMORY:-2g}
+    healthcheck:
+      # Bolt, with a real query: HTTP answers before Bolt does.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$HEALTHCHECK_PASSWORD\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+
+  backup:
+    <<: *hardening
+    image: brahmastra-backup:${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION}
+    build:
+      context: ./backup
+    # Runs as the image's postgres user: pg_dump needs no privilege, and the
+    # weekly restore test starts a throwaway server, which refuses to run as root.
+    user: postgres
+    environment:
+      BRAHMASTRA_ENV: production
+      TZ: ${TZ:-UTC}
+      PGHOST: postgres
+      PGUSER: brahmastra
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATABASE: brahmastra
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      BACKUP_OFFSITE: ${BACKUP_OFFSITE:-on}
+      BACKUP_TIME: ${BACKUP_TIME:-02:30}
+      RESTORE_TEST_WEEKDAY: ${RESTORE_TEST_WEEKDAY:-7}
+      RESTORE_TEST_TIME: ${RESTORE_TEST_TIME:-04:00}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-7}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-5}
+      BACKUP_KEEP_MONTHLY: ${BACKUP_KEEP_MONTHLY:-12}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      BACKUP_HEARTBEAT_URL: ${BACKUP_HEARTBEAT_URL:-}
+      RESTORE_TEST_HEARTBEAT_URL: ${RESTORE_TEST_HEARTBEAT_URL:-}
+      INSTANCE_NAME: ${DOMAIN:-brahmastra}
+      RESTIC_CACHE_DIR: /scratch/restic-cache
+    volumes:
+      - backups:/backups
+      - backup-scratch:/scratch
+    tmpfs: ["/tmp:size=64m"]
+    # internal to reach Postgres; edge for the off-host copy (S3).
+    networks: [edge, internal]
+    mem_limit: 768m
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Runs the pipeline on a timer and syncs Notion. Opt in, because it edits
+  # the Notion workspace it is pointed at:  docker compose --profile scheduler up -d
+  scheduler:
+    <<: *hardening
+    profiles: ["scheduler"]
+    image: brahmastra-backend:${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION}
+    read_only: true
+    command: ["python", "-m", "brahmastra.live_sync"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *app-env
+      POLL_INTERVAL: ${POLL_INTERVAL:-900}
+    volumes:
+      - brahmastra-data:/data
+    tmpfs: ["/tmp:size=256m"]
+    networks: [edge, internal]
+    mem_limit: ${BACKEND_MEMORY:-2g}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+networks:
+  edge: {}
+  internal:
+    internal: true
+
+volumes:
+  brahmastra-data:
+  postgres-data:
+  neo4j-data:
+  neo4j-logs:
+  caddy-data:
+  caddy-config:
+  backups:
+  backup-scratch:

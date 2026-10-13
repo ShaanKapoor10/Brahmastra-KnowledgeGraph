@@ -473,6 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("list", help="list users")
     r = sub.add_parser("reset-password", help="set a new password and end the user's sessions")
     r.add_argument("--email", required=True)
+    for sp in (c, r):
+        # For automation (Ansible, CI): read the password from stdin, like
+        # `docker login --password-stdin`, so it never appears in argv or history.
+        sp.add_argument("--password-stdin", action="store_true")
     a = ap.parse_args(argv)
     s = store()
     try:
@@ -481,10 +485,15 @@ def main(argv: list[str] | None = None) -> int:
                 flags = " (disabled)" if u["disabled"] else ""
                 print(f"{u['email']:40} {u['role']:7}{flags}  workspaces: {', '.join(u['workspaces']) or '-'}")
             return 0
-        pw = getpass.getpass("New password: ")
-        if pw != getpass.getpass("Repeat it: "):
-            print("The passwords did not match.")
-            return 1
+        if a.password_stdin:
+            import sys
+
+            pw = sys.stdin.readline().rstrip("\r\n")
+        else:
+            pw = getpass.getpass("New password: ")
+            if pw != getpass.getpass("Repeat it: "):
+                print("The passwords did not match.")
+                return 1
         if a.cmd == "create-admin":
             u = s.create_user(a.email, pw, role="admin", name=a.name, actor="cli")
             print(f"Created admin {u['email']}.")
