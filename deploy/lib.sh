@@ -11,6 +11,12 @@ REPO_DIR="$(cd "${DEPLOY_DIR}/.." && pwd)"
 ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE=(docker compose --project-directory "${DEPLOY_DIR}" -f "${DEPLOY_DIR}/docker-compose.prod.yml" --env-file "${ENV_FILE}")
 
+# Work from the repository root. The build contexts (../backend, ../frontend)
+# live there, and BuildKit refuses to read a context outside the current
+# directory without an interactive grant -- which an unattended upgrade cannot
+# give. Running from the root keeps that protection on instead of disabling it.
+cd "${REPO_DIR}"
+
 if [ -t 1 ]; then BOLD=$'\e[1m'; RED=$'\e[31m'; YEL=$'\e[33m'; GRN=$'\e[32m'; OFF=$'\e[0m'
 else BOLD=""; RED=""; YEL=""; GRN=""; OFF=""; fi
 
