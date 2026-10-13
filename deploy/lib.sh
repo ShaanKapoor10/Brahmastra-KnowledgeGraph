@@ -17,11 +17,15 @@ COMPOSE=(docker compose --project-directory "${DEPLOY_DIR}" -f "${DEPLOY_DIR}/do
 # give. Running from the root keeps that protection on instead of disabling it.
 cd "${REPO_DIR}"
 
-# Compose's newer "bake" build path asks for an interactive filesystem grant
-# for some layouts (seen on Windows with Compose 5.x even from the root), and
-# an unattended upgrade cannot answer it. The classic builder builds the same
-# images from the same Dockerfiles without the prompt.
-export COMPOSE_BAKE=false
+# Build our own images. Compose builds through buildx bake, which can ask for an
+# interactive filesystem grant to read a Dockerfile (seen with Compose 5.x on
+# Windows even for paths inside the checkout), and an unattended run cannot
+# answer. That grant protects against UNTRUSTED build definitions reading host
+# files; ours is the compose file of the release tag being installed, so the
+# check is relaxed for this one command and nowhere else.
+compose_build() {
+  BUILDX_BAKE_ENTITLEMENTS_FS=0 "${COMPOSE[@]}" build "$@"
+}
 
 if [ -t 1 ]; then BOLD=$'\e[1m'; RED=$'\e[31m'; YEL=$'\e[33m'; GRN=$'\e[32m'; OFF=$'\e[0m'
 else BOLD=""; RED=""; YEL=""; GRN=""; OFF=""; fi

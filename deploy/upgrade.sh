@@ -69,7 +69,7 @@ ok "backup taken"
 # ---- 3. build ------------------------------------------------------------------------------
 git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${tag}"
 info "building ${target}"
-if ! BRAHMASTRA_VERSION="${target}" "${COMPOSE[@]}" build --pull --quiet; then
+if ! BRAHMASTRA_VERSION="${target}" compose_build --pull --quiet; then
   git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${previous_ref}"
   die "build failed; still running ${previous}, nothing was changed"
 fi
@@ -90,7 +90,7 @@ warn "${target} did not become healthy; rolling back to ${previous}"
 env_set BRAHMASTRA_VERSION "${previous}"
 git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${previous_ref}"
 if ! docker image inspect "brahmastra-backend:${previous}" >/dev/null 2>&1; then
-  "${COMPOSE[@]}" build --quiet
+  compose_build --quiet
 fi
 "${COMPOSE[@]}" up -d --remove-orphans
 if wait_healthy 300; then

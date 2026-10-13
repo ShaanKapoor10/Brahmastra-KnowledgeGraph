@@ -127,7 +127,7 @@ fi
 version="$(current_version)"
 [ -n "${version}" ] || die "BRAHMASTRA_VERSION is empty in deploy/.env.production"
 info "building images for ${BOLD}${version}${OFF} (first build takes several minutes)"
-"${COMPOSE[@]}" build --pull --quiet
+compose_build --pull --quiet
 "${COMPOSE[@]}" up -d --remove-orphans
 info "waiting for the API to become healthy"
 wait_healthy 420 || die "the API did not become healthy. See: docker compose -f deploy/docker-compose.prod.yml logs backend"
