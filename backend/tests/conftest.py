@@ -39,6 +39,56 @@ from pathlib import Path
 
 import pytest
 
+# ---------------------------------------------------------------------------
+# PROCESS-WIDE, BEFORE ANY TEST MODULE IS IMPORTED.
+#
+# The per-test fixtures below come too late for code that runs at IMPORT time,
+# and importing `brahmastra.stores` reads backend/.env. On a developer machine
+# that put the deployed Postgres settings into this process during collection,
+# and tests/test_postgres_store.py -- which picked its DSN at import -- ran its
+# integration tests against production. Two /health tests created the account
+# tables there. So the dotenv read is switched off, and every database setting
+# is removed, here, at conftest import, which pytest does before collecting any
+# test module. The one Postgres a test may use is BRAHMASTRA_TEST_POSTGRES_DSN
+# (tests/_pg.py), and _guard_postgres_connections below enforces it.
+# ---------------------------------------------------------------------------
+os.environ["BRAHMASTRA_NO_DOTENV"] = "1"
+for _name in list(os.environ):
+    if _name.startswith(("POSTGRES_", "NEO4J_", "PG")) or _name in (
+            "DATABASE_URL", "NOTE_BACKEND", "GRAPH_BACKEND", "AURA_INSTANCEID"):
+        del os.environ[_name]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _guard_postgres_connections():
+    """
+    Any psycopg connection to a database other than the declared test database
+    fails the test that made it. This catches routes in that nobody has thought
+    of yet, which is what the import-time leak was.
+    """
+    try:
+        import psycopg
+    except ImportError:
+        yield
+        return
+    from tests import _pg
+
+    real_connect = psycopg.connect
+
+    def guarded(conninfo: str = "", **kwargs):
+        if not _pg.is_allowed(conninfo, kwargs):
+            raise _pg.UnsafeTestDatabase(
+                "A test tried to connect to a Postgres that is not BRAHMASTRA_TEST_POSTGRES_DSN. "
+                "Tests may only use the throwaway test database (see tests/_pg.py).")
+        return real_connect(conninfo, **kwargs)
+
+    psycopg.connect = guarded
+    try:
+        yield
+    finally:
+        psycopg.connect = real_connect
+
+
 # The database the developer actually uses. Nothing in the suite may touch it.
 PRODUCTION_DB = (
     Path(__file__).resolve().parent.parent / "data" / "concept_graph.db"

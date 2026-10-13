@@ -133,8 +133,14 @@ Knowledge graph engine that replaces Obsidian — turns notes into a queryable g
   Run from `backend/`: `uvicorn main:app --reload --port 8001` (NOT `brahmastra.main`,
   which does not exist).
 - **Frontend:** Next.js + React + D3, **port 3000**. Run `pnpm dev` from `frontend/`.
-- **Tests:** `python -m pytest tests/ -q` from `backend/` (~1040 passing; 14 of them
-  need a reachable Postgres and skip cleanly without one). Tests never call an LLM:
+- **Tests:** `python -m pytest tests/ -q` from `backend/` (~1050 passing). 14 Postgres
+  integration tests run ONLY against a throwaway database named by
+  `BRAHMASTRA_TEST_POSTGRES_DSN`, whose name must contain "test":
+  `docker compose -f tests/postgres-test.compose.yml up -d`, then
+  `BRAHMASTRA_TEST_POSTGRES_DSN=postgresql://brahmastra:brahmastra-test@localhost:5439/brahmastra_test`.
+  They used to read the app's own settings at import and ran against production
+  (that is how empty account tables appeared there); conftest now scrubs every
+  database setting at import and refuses any other psycopg connection. Tests never call an LLM:
   `tests/conftest.py` stubs the notes pass, the overview and the status pass;
   a test that exercises them is marked `real_session_passes` and fakes the chat.
 - **Full stack:** `docker compose up --build` **from the repo root** — postgres,

@@ -20,25 +20,11 @@ import pytest
 from brahmastra.stores.base import CAP_HYBRID_SEARCH, CAP_VECTOR_SEARCH
 
 
-def _dsn() -> str | None:
-    """A DSN only if something actually answers on it."""
-    try:
-        import psycopg
-    except ImportError:
-        return None
+from tests._pg import reachable_dsn  # noqa: E402
 
-    from brahmastra.stores.postgres_store import dsn as resolve
-
-    candidate = resolve()
-    try:
-        with psycopg.connect(candidate, connect_timeout=3):
-            return candidate
-    except Exception:
-        return None
-
-
-DSN = _dsn()
-needs_pg = pytest.mark.skipif(DSN is None, reason="no Postgres reachable")
+# Only the declared throwaway database (tests/_pg.py); never the app's settings.
+DSN = reachable_dsn()
+needs_pg = pytest.mark.skipif(DSN is None, reason="BRAHMASTRA_TEST_POSTGRES_DSN not set or not reachable")
 
 
 @pytest.fixture

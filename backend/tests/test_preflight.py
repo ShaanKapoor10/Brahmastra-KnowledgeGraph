@@ -53,3 +53,23 @@ def test_check_exits_in_production_and_does_nothing_in_development(monkeypatch):
     assert e.value.code == 78
     monkeypatch.setenv("BRAHMASTRA_ENV", "development")
     assert preflight.check(check_admin=False) == []
+
+
+def test_tests_cannot_reach_any_postgres_but_the_declared_test_database():
+    """The leak that put account tables into production must stay closed."""
+    import os
+
+    psycopg = pytest.importorskip("psycopg")
+    from tests import _pg
+
+    assert "POSTGRES_PORT" not in os.environ and os.environ.get("BRAHMASTRA_NO_DOTENV") == "1"
+    with pytest.raises(_pg.UnsafeTestDatabase):
+        psycopg.connect("postgresql://brahmastra:x@localhost:5433/brahmastra", connect_timeout=1)
+
+
+def test_a_test_database_must_be_named_as_one(monkeypatch):
+    from tests import _pg
+
+    monkeypatch.setenv(_pg.ENV_VAR, "postgresql://u:p@localhost:5433/brahmastra")
+    with pytest.raises(_pg.UnsafeTestDatabase, match="must have 'test'"):
+        _pg.configured_dsn()
