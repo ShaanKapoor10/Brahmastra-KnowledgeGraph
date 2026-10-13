@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from brahmastra.auth import auth_status, require_api_key
 from brahmastra.db import init_db
 from brahmastra.routers import notes, pipeline, graph, ask, paths, workspaces, entities, diagnostics
+from brahmastra.routers import auth_routes
 from brahmastra.ingest.routes import router as ingest_router
 
 
@@ -96,14 +97,29 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # "*" is right for local development and wrong for a public deployment:
-    # combined with allow_credentials it lets any site call the API as the
-    # user. Set CORS_ORIGINS to a comma-separated allowlist when deploying.
-    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
+    # No cross-origin browser access unless CORS_ORIGINS names it. The
+    # dashboard never needs CORS: it calls the API from its own server through
+    # app/api/[...path]. The old default was "*", which with allow_credentials
+    # let any website call the API as whoever was signed in -- failing open
+    # again. List origins (comma-separated) only for a browser client that
+    # talks to the API directly.
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Headers every response carries. HSTS belongs to the TLS terminator
+    (Caddy), which knows whether the connection really is HTTPS."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
 
 # Authentication. Registered after CORS so a rejected request still carries
 # CORS headers — otherwise a browser reports an opaque network error instead of
@@ -182,6 +198,7 @@ if _mcp_http_enabled():
     app.mount("/mcp", _mcp.streamable_http_app())
 
 # Register routers
+app.include_router(auth_routes.router)
 app.include_router(notes.router)
 app.include_router(pipeline.router)
 app.include_router(graph.router)

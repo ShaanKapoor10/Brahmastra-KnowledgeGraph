@@ -167,32 +167,73 @@ reach the graph directly.
 
 ---
 
-## Authentication
+## Authentication and accounts
 
 The API exposes the whole graph, can spend LLM tokens and can write into a
-Notion workspace. It **fails closed**:
+Notion workspace. It **fails closed**, and every person signs in as themselves.
+
+### Set up the first admin
+
+On the server (or inside the backend container):
+
+```bash
+python -m brahmastra.accounts create-admin --email you@example.com
+# docker compose exec backend python -m brahmastra.accounts create-admin --email you@example.com
+```
+
+Then open the dashboard and sign in. Admins add everyone else (API, or the
+settings screen once it ships). On a host with no shell, set
+`BRAHMASTRA_SETUP_TOKEN` to a long random value: `POST /auth/setup` with that
+token creates the first admin, once, and is closed as soon as a user exists.
+Without the token the route does not exist, so a fresh public install cannot
+be claimed by whoever finds it first.
+
+### Who can do what
+
+| Role | Can |
+|---|---|
+| viewer | read, search and ask, in their workspaces |
+| member | also write notes, ingest sessions and run the pipeline |
+| admin | also every workspace, users, Groq keys, creating and deleting workspaces |
+
+Non-admins see only the workspaces they are members of. The check runs once,
+in the auth middleware, for every route; the workspaces routes filter their own
+listings, so a member cannot even learn another workspace's name.
+
+### How each client authenticates
+
+| Client | Credential |
+|---|---|
+| Dashboard | a session, in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS). The proxy sends it on as a bearer token; browser JavaScript never sees it |
+| Scripts, agents, remote MCP | a personal API token (`POST /auth/tokens`, shown once, revocable) as `Authorization: Bearer bra_...` |
+| Scheduler, local MCP server | `BRAHMASTRA_API_KEY`, the legacy shared key: a service identity with admin rights. Prefer personal tokens for anything a person uses |
 
 | Configuration | Result |
 |---|---|
-| `BRAHMASTRA_API_KEY` set | `Authorization: Bearer <key>` required (or `X-API-Key`) |
-| nothing set | **503 on every route except health probes** |
-| `BRAHMASTRA_ALLOW_ANONYMOUS=1` | open — local development only |
+| any user exists, or `BRAHMASTRA_API_KEY` set | credentials required on every route except health, login and status |
+| neither | **503 on every route**, saying how to create an admin |
+| `BRAHMASTRA_ALLOW_ANONYMOUS=1` | open, for local development; **ignored once a user exists** |
+| `DASHBOARD_SERVICE_KEY=1` (frontend) | the dashboard sends the shared key for visitors who are not signed in. Only for a dashboard nobody untrusted can reach |
 
-Forgetting to configure a deployment therefore breaks it loudly instead of
-publishing the graph quietly. That default is deliberate: this codebase has
-already shipped workspace isolation that leaked silently and a hardcoded CORS
-`*`, and both failed open.
+### Built-in protections
+
+- Passwords: scrypt (stdlib), at least 10 characters. A new password ends every session.
+- Sessions and API tokens: 256-bit random, stored only as SHA-256 hashes. Sessions last 14 days.
+- Login: one generic error for a wrong email or password (timing equalised); 5 failures per
+  email and address lock it for 15 minutes. Behind a proxy, set `TRUST_PROXY_HEADERS=1` so the
+  real client address is used.
+- Cross-site requests: the dashboard refuses state-changing requests whose `Origin` is not its
+  own host. CORS is closed unless `CORS_ORIGINS` lists origins.
+- Rate limits per user (`RATE_LIMITS`, see `brahmastra/ratelimit.py`): `/ask` 30/min, pipeline
+  20/h, ingest 30/h, writes 300/min, reads 1200/min.
+- The last active admin cannot be demoted, disabled or deleted.
+- Audit log (`GET /auth/audit`, admin): sign-ins, failures, lockouts, user and token changes.
+- Remote MCP (`/mcp`) is admin-only for now: its tools are not yet scoped per user, and one of
+  them searches every workspace.
 
 `/health` and `/health/ready` stay open, because an orchestrator's health
-checker cannot carry a token, and a probe that 503s on unset auth would mask
-the real cause. `/health/ready` reports which state it is in, so you can see a
-deployment is protected without reading its environment.
-
-The dashboard reaches a protected API through `app/api/[...path]/route.ts`,
-which proxies server-side and injects the key. The old `next.config.mjs`
-rewrite was removed for exactly this reason — a rewrite forwards the request
-untouched and cannot attach a header, so every browser call would 401.
-`BRAHMASTRA_API_KEY` never reaches the browser.
+checker cannot carry a token. `/health/ready` reports which auth state the
+deployment is in.
 
 ---
 
@@ -305,7 +346,8 @@ When a client cannot reach Neo4j directly, or you want a single authenticated
 door, set `MCP_HTTP=1` and the same ten tools are served at `/mcp`, mounted
 inside the FastAPI app so they inherit the API's authentication — one boundary,
 not a second unprotected way into the same graph. Verified: `/mcp` returns 401
-without a key.
+without a key. Use an admin's personal API token: until the tools are scoped
+per user, `/mcp` is admin-only.
 
 ```json
 {
@@ -313,7 +355,7 @@ without a key.
     "brahmastra": {
       "type": "http",
       "url": "https://your-host/mcp",
-      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+      "headers": { "Authorization": "Bearer bra_YOUR_PERSONAL_TOKEN" }
     }
   }
 }
@@ -339,11 +381,12 @@ See `docs/PLATFORMS.md` for which hosts can meet this.
 
 ## Before going public
 
-- [ ] `CORS_ORIGINS` set to a real allowlist, not `*`
+- [x] CORS closed by default (`CORS_ORIGINS` only for a browser client calling the API directly)
 - [ ] At least 1 GB RAM, or `EMBEDDINGS_ENABLED=0`
 - [ ] TLS in front of it — a bearer token over plain HTTP is not a secret
-- [x] Authentication — set `BRAHMASTRA_API_KEY`, and make sure
-      `BRAHMASTRA_ALLOW_ANONYMOUS` is **not** set on the host
+- [ ] First admin created (`python -m brahmastra.accounts create-admin`); no
+      `BRAHMASTRA_ALLOW_ANONYMOUS` and no `DASHBOARD_SERVICE_KEY` on a public host
+- [ ] `TRUST_PROXY_HEADERS=1` when behind a reverse proxy
 - [ ] `backend/.env` present on the host and excluded from the image
       (`.dockerignore` already does this)
 - [ ] Volume mounted and backed up if using SQLite

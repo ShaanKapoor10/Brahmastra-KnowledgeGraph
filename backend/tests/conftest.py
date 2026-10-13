@@ -236,3 +236,22 @@ def _no_llm_session_passes(monkeypatch, request):
     from brahmastra.ingest import status
 
     monkeypatch.setattr(status, "assign", lambda artifacts, turns, chat=None: (artifacts, {}))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_accounts():
+    """
+    Accounts are cached per process -- the AccountStore singleton, and auth's
+    "do any users exist" flag, which once True stays True. Each test has its own
+    database, so both are reset, or one test's admin would lock the next test's
+    anonymous app.
+    """
+    from brahmastra import accounts, auth, ratelimit
+
+    accounts.reset_store_for_tests()
+    auth.reset_for_tests()
+    ratelimit.reset()
+    yield
+    accounts.reset_store_for_tests()
+    auth.reset_for_tests()
+

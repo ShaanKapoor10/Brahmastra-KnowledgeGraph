@@ -24,6 +24,16 @@ from brahmastra.workspace import DEFAULT_WORKSPACE, InvalidWorkspaceId, slugify
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 
+def _allowed() -> frozenset[str] | None:
+    """The workspaces the caller may see; None means all. These routes sit outside
+    the auth middleware's per-workspace check (they name workspaces themselves),
+    so they filter here: a member must not even learn another workspace exists."""
+    from brahmastra.accounts import current_identity
+
+    identity = current_identity()
+    return None if identity is None else identity.workspaces
+
+
 class CreateWorkspaceRequest(BaseModel):
     # id is optional: a UI can post just a display name and get a slug.
     id: str | None = Field(default=None, description="Slug; derived from name if omitted")
@@ -37,7 +47,9 @@ class CreateWorkspaceRequest(BaseModel):
 
 @router.get("")
 async def list_workspaces() -> dict[str, Any]:
-    return {"workspaces": db.list_workspaces(), "current": db.workspace()}
+    allowed = _allowed()
+    listed = [w for w in db.list_workspaces() if allowed is None or w.get("id") in allowed]
+    return {"workspaces": listed, "current": db.workspace()}
 
 
 @router.post("", status_code=201)
@@ -69,6 +81,11 @@ async def search_across(
 ) -> dict[str, Any]:
     """Search several graphs at once. Results carry the workspace they came from."""
     targets = [w.strip() for w in workspaces.split(",")] if workspaces else None
+    allowed = _allowed()
+    if allowed is not None:
+        targets = sorted(allowed if targets is None else set(targets) & allowed)
+        if not targets:
+            return {"query": q, "searched": [], "results": []}
     try:
         hits = db.search_notes_across(q, targets, limit)
     except NotImplementedError as e:
@@ -78,7 +95,8 @@ async def search_across(
 
 @router.get("/{workspace_id}")
 async def get_workspace(workspace_id: str) -> dict[str, Any]:
-    ws = db.get_workspace(workspace_id)
+    allowed = _allowed()
+    ws = db.get_workspace(workspace_id) if allowed is None or workspace_id in allowed else None
     if not ws:
         raise HTTPException(status_code=404, detail=f"No workspace {workspace_id!r}")
     # Stats come from a store bound to that workspace, so this reports the

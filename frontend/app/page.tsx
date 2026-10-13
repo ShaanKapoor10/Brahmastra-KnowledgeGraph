@@ -1,4 +1,5 @@
-import { Dashboard } from "@/components/dashboard"
+import { redirect } from "next/navigation"
+import { Dashboard, type SignedInUser } from "@/components/dashboard"
 import { SAMPLE_NOTES, SAMPLE_TRIPLES } from "@/lib/sample-notes"
 import type { Note, RawTriple, PipelineResult } from "@/lib/types"
 import { adaptBackendGraph } from "@/lib/backend-adapter"
@@ -22,8 +23,8 @@ async function loadFromBackend(workspace: string): Promise<{
   const scope = workspace === "default" ? "" : `?workspace=${encodeURIComponent(workspace)}`
 
   try {
-    // backendFetch attaches BRAHMASTRA_API_KEY; this runs on the server, so
-    // the key never reaches the browser.
+    // backendFetch sends the signed-in user's session; this runs on the server,
+    // so the token never reaches browser JavaScript.
     const [notesRes, triplesRes, graphRes] = await Promise.all([
       backendFetch(`/notes${scope}`, { cache: "no-store" }),
       backendFetch(`/graph/triples${scope}`, { cache: "no-store" }),
@@ -111,6 +112,16 @@ export default async function Page({
   // other graph rather than filtering one it already fetched.
   const workspace = (await searchParams).workspace?.trim() || "default"
 
+  // Who is looking. 401: not signed in. 503: no accounts exist yet, and the
+  // login page explains how to create the first admin. An unreachable backend
+  // falls through, so the page still renders and says the backend is down.
+  const meRes = await backendFetch("/auth/me", { cache: "no-store" }).catch(() => null)
+  if (meRes && (meRes.status === 401 || meRes.status === 503)) {
+    const next = workspace === "default" ? "/" : `/?workspace=${encodeURIComponent(workspace)}`
+    redirect(`/login?next=${encodeURIComponent(next)}`)
+  }
+  const user: SignedInUser | null = meRes?.ok ? await meRes.json() : null
+
   const [backend, workspaces] = await Promise.all([
     loadFromBackend(workspace),
     loadWorkspaces(),
@@ -127,6 +138,7 @@ export default async function Page({
       initialResult={initialResult}
       workspace={workspace}
       workspaces={workspaces.length > 0 ? workspaces : [{ id: workspace }]}
+      user={user}
     />
   )
 }

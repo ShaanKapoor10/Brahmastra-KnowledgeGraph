@@ -36,7 +36,16 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
 ]
 
+/** Who is signed in, as GET /auth/me returns it. */
+export interface SignedInUser {
+  kind: "session" | "token" | "service" | "anonymous"
+  role: "viewer" | "member" | "admin"
+  email: string | null
+  name: string | null
+}
+
 interface Props {
+  user?: SignedInUser | null
   initialNotes: Note[]
   initialTriples: RawTriple[]
   backendAvailable?: boolean
@@ -55,6 +64,7 @@ export function Dashboard({
   initialResult = null,
   workspace = "default",
   workspaces = [],
+  user = null,
 }: Props) {
   const [notes, setNotes] = useState<Note[]>(initialNotes)
   const [triples, setTriples] = useState<RawTriple[]>(initialTriples)
@@ -258,7 +268,9 @@ export function Dashboard({
                 only see its own runs. */}
             {backendAvailable && <PipelineIndicator scope={scope} />}
 
-            {backendAvailable && (
+            {user && <UserMenu user={user} />}
+
+            {backendAvailable && user?.role !== "viewer" && (
               <button
                 onClick={runPipelineNow}
                 disabled={pipelineRunning}
@@ -371,3 +383,28 @@ export function Dashboard({
     </div>
   )
 }
+
+/** The signed-in person, their role, and a way out. */
+function UserMenu({ user }: { user: SignedInUser }) {
+  async function signOut() {
+    await fetch("/session/logout", { method: "POST" }).catch(() => undefined)
+    window.location.replace("/login")
+  }
+  const label = user.kind === "session" ? (user.name || user.email) : user.kind === "anonymous" ? "development mode" : "service key"
+  return (
+    <div className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:flex">
+      <span title={user.email ?? undefined}>
+        {label} · {user.role}
+      </span>
+      {user.kind === "session" && (
+        <button
+          onClick={signOut}
+          className="rounded-md border border-border px-2 py-0.5 transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          sign out
+        </button>
+      )}
+    </div>
+  )
+}
+
