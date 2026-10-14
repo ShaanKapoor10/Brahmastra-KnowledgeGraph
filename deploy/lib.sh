@@ -64,11 +64,13 @@ random_secret() {
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "$1 is required: $2"; }
 
 wait_healthy() {
-  # Wait until the backend answers its uptime check from inside the network.
+  # Wait until the backend is FULLY healthy, from inside the network. "degraded"
+  # (graph engine down) still serves people, but an upgrade or a graph swap
+  # must not count it as done.
   local timeout="${1:-300}" waited=0
   while [ "${waited}" -lt "${timeout}" ]; do
     if "${COMPOSE[@]}" exec -T backend python -c \
-      "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health/uptime', timeout=5).status == 200 else 1)" \
+      "import json,urllib.request,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8001/health/uptime', timeout=5)).get('status') == 'ok' else 1)" \
       >/dev/null 2>&1; then
       return 0
     fi

@@ -350,6 +350,14 @@ def run_pipeline(full: bool = False) -> dict[str, Any]:
         read_at = outcome.pop("_inputs_read_at", None)
         if "graph" not in (outcome.get("failed_stages") or []):
             clear_dirty(read_at if read_at is not None else began)
+            # The last good graph, copied to Postgres for when the engine is
+            # down (graph_snapshot.py). A failure here never fails the run.
+            try:
+                from brahmastra import graph_snapshot
+
+                outcome["stages"]["snapshot"] = _timed(outcome, "snapshot", graph_snapshot.refresh)
+            except Exception as exc:                        # noqa: BLE001
+                outcome["stages"]["snapshot"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         return outcome
     finally:
         _release_lock()

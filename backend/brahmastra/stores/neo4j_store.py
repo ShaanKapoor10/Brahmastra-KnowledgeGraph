@@ -268,14 +268,20 @@ class Neo4jStore(GraphStore):
             # slow on the first connection after a resume, and a timeout that
             # fires during a normal wake-up would turn a working instance into
             # an unreachable one.
+            #
+            # A LOCAL engine (the production compose stack) gets short waits:
+            # it never needs to wake up, so a slow answer means it is down, and
+            # the circuit breaker (graph_health.py) plus the snapshot fallback
+            # turn that into a degraded dashboard instead of hung requests.
+            remote = self._encrypted() or "neo4j.io" in (self._uri or "")
             kwargs["connection_timeout"] = float(
-                os.environ.get("NEO4J_CONNECT_TIMEOUT", "20")
+                os.environ.get("NEO4J_CONNECT_TIMEOUT", "20" if remote else "5")
             )
             kwargs["connection_acquisition_timeout"] = float(
-                os.environ.get("NEO4J_ACQUIRE_TIMEOUT", "45")
+                os.environ.get("NEO4J_ACQUIRE_TIMEOUT", "45" if remote else "5")
             )
             kwargs["max_transaction_retry_time"] = float(
-                os.environ.get("NEO4J_RETRY_TIME", "30")
+                os.environ.get("NEO4J_RETRY_TIME", "30" if remote else "10")
             )
             # Only supply an SSL context when TLS is actually in play. Passing
             # one to a plaintext server does not downgrade gracefully -- the
@@ -329,8 +335,24 @@ class Neo4jStore(GraphStore):
                 "workspaces. Add the filter, or pass unscoped=True if crossing "
                 f"workspaces is intended.\n\n{cypher.strip()[:400]}"
             )
-        with self.driver.session(database=self._database) as s:
-            return [r.data() for r in s.run(cypher, **params)]
+        from neo4j import Query
+
+        from brahmastra.graph_health import GraphUnavailable, breaker, is_outage
+
+        breaker.before_call()
+        # A per-query ceiling, so one slow query cannot hold a request thread
+        # indefinitely. Generous: pipeline writes batch thousands of rows.
+        timeout = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "120"))
+        try:
+            with self.driver.session(database=self._database) as s:
+                rows = [r.data() for r in s.run(Query(cypher, timeout=timeout), **params)]
+        except Exception as exc:
+            if is_outage(exc):
+                breaker.failure(exc)
+                raise GraphUnavailable(f"graph engine unavailable: {type(exc).__name__}: {exc}"[:300]) from exc
+            raise
+        breaker.success()
+        return rows
 
     def close(self) -> None:
         if self._driver is not None:

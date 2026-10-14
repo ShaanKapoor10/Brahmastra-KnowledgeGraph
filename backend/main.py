@@ -7,6 +7,7 @@ FastAPI only sees the path after the prefix (e.g. GET /health).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -85,13 +86,38 @@ async def lifespan(app: FastAPI):
 
     preflight.check()
     _try_init_db()
-    if _mcp_http_enabled():
-        from brahmastra.mcp_server import mcp as _mcp
+    refresher = asyncio.create_task(_refresh_snapshots_forever())
+    try:
+        if _mcp_http_enabled():
+            from brahmastra.mcp_server import mcp as _mcp
 
-        async with _mcp.session_manager.run():
+            async with _mcp.session_manager.run():
+                yield
+        else:
             yield
-    else:
-        yield
+    finally:
+        refresher.cancel()
+
+
+async def _refresh_snapshots_forever() -> None:
+    """
+    Keep the stale-graph copy current even if no pipeline runs for a while
+    (graph_snapshot.py). Each workspace is copied only when its graph was
+    rebuilt since the last copy, so a quiet hour costs one cheap query per
+    workspace. Never raises: a failed refresh is visible in the snapshot's age
+    metric, and the next tick tries again.
+    """
+    from brahmastra import graph_snapshot
+
+    interval = max(60.0, float(os.environ.get("SNAPSHOT_REFRESH_MINUTES", "30")) * 60)
+    await asyncio.sleep(min(interval, 120))         # let startup settle first
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            await loop.run_in_executor(None, graph_snapshot.refresh_all)
+        except Exception:                           # noqa: BLE001
+            pass
+        await asyncio.sleep(interval)
 
 
 app = FastAPI(
@@ -202,6 +228,24 @@ if _mcp_http_enabled():
     _mcp.settings.streamable_http_path = "/"
     app.mount("/mcp", _mcp.streamable_http_app())
 
+@app.exception_handler(Exception)
+async def _graph_outage_handler(request, exc):
+    """
+    A route that needs the graph engine while it is down answers 503 with a
+    reason, at once (the circuit breaker in graph_health.py), instead of a 500
+    or a request that hangs on a dead socket. Notes, search and /ask do not
+    get here: they degrade on their own.
+    """
+    from brahmastra.graph_health import is_outage
+
+    if is_outage(exc):
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            content={"detail": "The knowledge graph is temporarily unavailable. Notes, "
+                                               "search and Ask still work.", "degraded": "graph_unavailable"},
+                            headers={"Retry-After": "30"})
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
 # Register routers
 app.include_router(auth_routes.router)
 app.include_router(notes.router)
@@ -242,66 +286,46 @@ async def uptime(response: Response) -> dict[str, str]:
     """
     For an external uptime monitor (UptimeRobot, Better Stack, a status page).
 
-    The public edge exposes this and nothing else from /health: it says only
-    whether the service works, end to end, through both stores. /health/ready
-    also names the backends, the auth mode and the note count -- useful to an
-    operator, a free reconnaissance report to anyone else.
+    The public edge exposes this and nothing else from /health: up, degraded or
+    down, and no detail. /health/ready names the backends, the auth mode and
+    the counts -- useful to an operator, a free reconnaissance report to anyone
+    else.
+
+        200 ok            both stores answer
+        200 degraded      the graph engine is down; notes, search and Ask work
+        503 unavailable   the system of record (Postgres) cannot be reached
     """
-    import asyncio
-
-    loop = asyncio.get_running_loop()
-
-    def probe() -> bool:
-        from brahmastra import db
-
-        if not _schema_ready and _try_init_db() is not None:
-            return False
-        db.get_db_stats()
-        return True
-
-    try:
-        ok = await asyncio.wait_for(loop.run_in_executor(None, probe), timeout=8)
-    except Exception:                                    # noqa: BLE001
-        ok = False
-    if not ok:
+    components = await _components()
+    state = _overall(components)
+    if state == "unavailable":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return {"status": "ok" if ok else "unavailable"}
+    return {"status": state}
 
 
 @app.get("/health/ready")
 async def ready(response: Response) -> dict[str, Any]:
     """
-    Readiness. Answers "can this instance serve traffic?" — which means the
-    graph store must actually respond, not merely be configured.
+    Readiness: can this instance serve traffic?
 
-    Returns 503 when it cannot, so a load balancer stops routing here while
-    leaving the process alive to recover. This is the probe worth wiring up:
-    the store is remote and pausable when GRAPH_BACKEND=neo4j, and Aura Free
-    suspends after roughly three days idle.
+    Ready means the SYSTEM OF RECORD answers. The graph engine is derived and
+    may be down -- that is "degraded", still 200, because notes, note search
+    and Ask keep working and the dashboard shows the last good graph. Failing
+    readiness on a Neo4j outage would make every orchestrator and proxy drop
+    the whole service for the loss of one rebuildable cache; it is how a
+    suspended Aura once blanked the dashboard. 503 only when Postgres is down.
     """
-    from brahmastra import db
+    from brahmastra.graph_health import breaker
     from brahmastra.stores import backend_name, note_backend_name
 
     notes_on = note_backend_name() or backend_name()
     detail: dict[str, Any] = {
         "service": "brahmastra",
         "backend": backend_name(),
-        # Which store holds the data that cannot be recomputed. Reported
-        # separately from `backend` because they are now separable, and because
-        # the answer is the one thing worth checking after a deploy.
         "system_of_record": notes_on,
-        # Visible on purpose: "unconfigured" means the API is refusing all
-        # traffic, and "anonymous" means it is open to anyone who can reach it.
+        # "unconfigured" means the API is refusing all traffic, and
+        # "anonymous" means it is open to anyone who can reach it.
         "auth": auth_status(),
     }
-
-    # A misconfiguration that looks completely healthy is the one worth
-    # surfacing. SQLite as the system of record answers every probe normally
-    # while being one file on one container's disk -- lost on redeploy, invisible
-    # to a second instance, and lexical-only, so hybrid search silently
-    # degrades. It stays a warning rather than a 503: refusing traffic would
-    # turn a recoverable misconfiguration into an outage, and single-store
-    # SQLite remains a legitimate way to run this locally.
     if notes_on == "sqlite":
         detail["warnings"] = [
             "system of record is SQLite: a single file on this container's "
@@ -309,27 +333,59 @@ async def ready(response: Response) -> dict[str, Any]:
             "by any other instance, and lexical-only (no hybrid search). Set "
             "NOTE_BACKEND=postgres for anything deployed."
         ]
-    # Finish what startup could not. The schema is created idempotently, so
-    # retrying here is what lets an instance that booted against a suspended
-    # engine become ready on its own the moment that engine returns -- without
-    # a restart, and without an operator noticing.
-    if not _schema_ready:
-        failure = _try_init_db()
-        if failure is not None:
-            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            detail.update(status="unavailable", error=failure,
-                          schema="not initialised")
-            return detail
-
-    try:
-        stats = db.get_db_stats()
-        detail.update(
-            status="ready",
-            workspace=stats.get("workspace"),
-            notes=stats.get("notes_total"),
-            graph_cached=stats.get("graph_cached"),
-        )
-    except Exception as exc:
+    components = await _components(detail)
+    detail["components"] = components
+    detail["graph_breaker"] = breaker.snapshot()
+    detail["status"] = {"ok": "ready", "degraded": "degraded", "unavailable": "unavailable"}[_overall(components)]
+    if detail["status"] == "unavailable":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        detail.update(status="unavailable", error=f"{type(exc).__name__}: {exc}"[:300])
     return detail
+
+
+def _overall(components: dict[str, str]) -> str:
+    if components.get("notes") != "ok":
+        return "unavailable"
+    return "ok" if components.get("graph") == "ok" else "degraded"
+
+
+async def _components(detail: dict[str, Any] | None = None) -> dict[str, str]:
+    """Probe each store separately, bounded, off the event loop."""
+    import asyncio
+
+    def probe() -> dict[str, str]:
+        from brahmastra import db
+
+        out: dict[str, str] = {}
+        # Finish what startup could not, FIRST: the schema is created
+        # idempotently, so an instance that booted while a store was down
+        # becomes ready on its own the moment the store returns -- and the
+        # notes check below needs the tables to exist.
+        init_failure = _try_init_db() if not _schema_ready else None
+        try:
+            db.list_workspaces()                 # a SOURCE method: answered by the note store
+            out["notes"] = "ok"
+        except Exception as exc:                 # noqa: BLE001
+            out["notes"] = f"unavailable: {type(exc).__name__}: {exc}"[:200]
+        try:
+            if init_failure is not None:
+                raise RuntimeError(init_failure)
+            stats = db.get_db_stats()
+            out["graph"] = "ok"
+            if detail is not None:
+                detail.update(workspace=stats.get("workspace"), notes=stats.get("notes_total"),
+                              graph_cached=stats.get("graph_cached"))
+        except Exception as exc:                 # noqa: BLE001
+            out["graph"] = f"unavailable: {type(exc).__name__}: {exc}"[:200]
+        return out
+
+    # run_in_executor does NOT carry context variables into the thread, and the
+    # request's workspace is one (main.bind_workspace): without copying the
+    # context, readiness reported `default` whatever workspace was asked for.
+    import contextvars
+
+    ctx = contextvars.copy_context()
+    try:
+        return await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(None, ctx.run, probe), timeout=10)
+    except Exception:                            # noqa: BLE001
+        return {"notes": "unavailable: timeout", "graph": "unavailable: timeout"}

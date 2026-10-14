@@ -1,6 +1,16 @@
 import type { Note, RawTriple } from "./types"
 
 /**
+ * DEMO BUILDS ONLY. A production build replaces this whole module with
+ * sample-notes.empty.ts (see next.config.mjs), so none of it ships: sample
+ * notes on a real install look exactly like someone else's data, and on
+ * 2026-10-13 they made a graph outage look like data loss. The marker below is
+ * what scripts/check-no-sample-data.mjs looks for in a production build.
+ */
+export const IS_DEMO_BUILD = true
+export const SAMPLE_DATA_MARKER = "brahmastra-sample-data-v1"
+
+/**
  * A small synthetic "vault". The notes are plain unstructured text with NO
  * [[links]] between them — the concept graph is entirely inferred from content.
  *

@@ -1,5 +1,21 @@
+// Sample data ships only in an explicit demo build. Everything else -- every
+// production image -- gets the empty module instead, so the dashboard can never
+// show invented notes on a real install (lib/sample-notes.ts says why).
+const demoBuild = process.env.BRAHMASTRA_DEMO_BUILD === "1"
+const sampleAlias = demoBuild ? {} : { "@/lib/sample-notes": "./lib/sample-notes.empty.ts" }
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  turbopack: { resolveAlias: sampleAlias },
+  webpack: (config) => {
+    if (!demoBuild) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        "@/lib/sample-notes": new URL("./lib/sample-notes.empty.ts", import.meta.url).pathname,
+      }
+    }
+    return config
+  },
   // Emit .next/standalone: a self-contained server with only the node_modules
   // it actually imports. Without it the runtime image has to carry the full
   // dependency tree, which is most of the image size for a Next app.

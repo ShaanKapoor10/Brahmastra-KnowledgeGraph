@@ -29,10 +29,20 @@ interface AskResult {
    * Absent on global (cluster summary) answers.
    */
   source?: "graph" | "notes" | "transcript" | "none"
+  /** Set when the graph engine was down and the answer came from the notes instead. */
+  degraded?: "graph_unavailable"
   passages?: Passage[]
 }
 
 const SOURCE: Record<string, { label: string; title: string; cls: string; Icon: typeof Network }> = {
+  degraded: {
+    label: "graph unavailable, answered from your notes",
+    title:
+      "The knowledge graph could not be reached, so this was answered from your notes and transcripts. " +
+      "It was not checked against the graph's resolved names or contradictions.",
+    cls: "border-orange-500/40 bg-orange-500/10 text-orange-300",
+    Icon: MessageSquareQuote,
+  },
   graph: {
     label: "from the graph",
     title: "Answered from facts and statements in the knowledge graph.",
@@ -188,8 +198,8 @@ export function AskPanel({ backendAvailable = false }: { backendAvailable?: bool
             >
               {result.mode} search
             </span>
-            {result.source && SOURCE[result.source] && (() => {
-              const s = SOURCE[result.source!]
+            {(result.degraded || (result.source && SOURCE[result.source])) && (() => {
+              const s = SOURCE[result.degraded ? "degraded" : result.source!]
               return (
                 <span
                   title={s.title}

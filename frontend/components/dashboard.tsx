@@ -7,6 +7,7 @@ import { noteTitleMap } from "@/lib/viz"
 import { GraphView } from "@/components/graph-view"
 import { EntityDetail } from "@/components/entity-detail"
 import { WorkspaceSwitcher, type WorkspaceOption } from "@/components/workspace-switcher"
+import type { GraphStatus } from "@/app/page"
 import { PipelineIndicator } from "@/components/pipeline-indicator"
 import { CentralEntities } from "@/components/panels/central-entities"
 import { ConceptClusters } from "@/components/panels/concept-clusters"
@@ -46,6 +47,8 @@ export interface SignedInUser {
 
 interface Props {
   user?: SignedInUser | null
+  /** Whether the graph on screen is live, a stale copy, or missing (engine down). */
+  graphStatus?: GraphStatus
   initialNotes: Note[]
   initialTriples: RawTriple[]
   backendAvailable?: boolean
@@ -65,6 +68,7 @@ export function Dashboard({
   workspace = "default",
   workspaces = [],
   user = null,
+  graphStatus = { state: "ok" },
 }: Props) {
   const [notes, setNotes] = useState<Note[]>(initialNotes)
   const [triples, setTriples] = useState<RawTriple[]>(initialTriples)
@@ -326,6 +330,7 @@ export function Dashboard({
           })}
         </nav>
       </header>
+      <GraphBanner status={graphStatus} />
 
       {/* Pipeline status bar */}
       {pipelineStatus && (
@@ -404,6 +409,34 @@ function UserMenu({ user }: { user: SignedInUser }) {
           sign out
         </button>
       )}
+    </div>
+  )
+}
+
+/**
+ * Says plainly when the graph is not live. Notes, search and Ask keep working
+ * through a graph-engine outage, so the banner says what still works rather
+ * than letting an old or empty graph pass for the current one.
+ */
+function GraphBanner({ status }: { status: GraphStatus }) {
+  if (status.state === "ok") return null
+  const when =
+    status.state === "stale" && status.builtAt
+      ? new Date(status.builtAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : null
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-200 sm:px-6"
+    >
+      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+      <p>
+        <span className="font-medium">The knowledge graph is temporarily unavailable.</span>{" "}
+        {status.state === "stale"
+          ? `You are seeing the graph as it was${when ? ` on ${when}` : ""}; it will update when the service recovers. `
+          : "There is no saved copy to show yet. "}
+        Notes, search and Ask still work, and answers come from your notes.
+      </p>
     </div>
   )
 }

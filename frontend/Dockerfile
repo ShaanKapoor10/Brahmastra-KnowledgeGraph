@@ -25,7 +25,12 @@ COPY . .
 # next build reads BACKEND_URL for the rewrite default; the runtime value below
 # is what actually takes effect, this only has to be syntactically valid.
 ENV NEXT_TELEMETRY_DISABLED=1
+# Sample notes ship only in a demo build (BRAHMASTRA_DEMO_BUILD=1); see lib/sample-notes.ts.
+ARG BRAHMASTRA_DEMO_BUILD=
+ENV BRAHMASTRA_DEMO_BUILD=${BRAHMASTRA_DEMO_BUILD}
 RUN pnpm build
+# A production image must not contain them: this fails the image build if it does.
+RUN node scripts/check-no-sample-data.mjs
 
 FROM node:20-slim AS runtime
 WORKDIR /app

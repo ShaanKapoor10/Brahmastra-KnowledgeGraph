@@ -61,24 +61,40 @@ def test_readiness_reports_the_store(client):
     assert "notes" in body, "must actually query the store, not just return ok"
 
 
-def test_readiness_is_503_when_the_store_is_unreachable(client, monkeypatch):
+def test_a_graph_outage_is_degraded_not_down(client, monkeypatch):
     """
-    503 is the point: a load balancer stops routing here while the process
-    stays alive to recover. Aura Free suspends after ~3 days idle, so this is
-    a state the deployment will genuinely reach.
+    The graph is derived; losing it must not take the service down. Failing
+    readiness here would make proxies and orchestrators drop everything -- notes,
+    search and Ask included -- for the loss of one rebuildable cache.
     """
     import brahmastra.db as db_mod
 
     def dead(*a, **k):
-        raise RuntimeError("Failed to DNS resolve address")
+        raise ConnectionError("Failed to DNS resolve address")
 
     monkeypatch.setattr(db_mod, "get_db_stats", dead)
 
     r = client.get("/health/ready")
-    assert r.status_code == 503
+    assert r.status_code == 200
     body = r.json()
-    assert body["status"] == "unavailable"
-    assert "Failed to DNS resolve" in body["error"], "must say what went wrong"
+    assert body["status"] == "degraded"
+    assert body["components"]["notes"] == "ok"
+    assert "Failed to DNS resolve" in body["components"]["graph"], "must say what went wrong"
+    assert client.get("/health/uptime").json() == {"status": "degraded"}
+    assert client.get("/health").status_code == 200, "liveness never depends on a store"
+
+
+def test_readiness_is_503_when_the_system_of_record_is_unreachable(client, monkeypatch):
+    """503 is for the one store whose loss means the service cannot work."""
+    import brahmastra.db as db_mod
+
+    def dead(*a, **k):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(db_mod, "list_workspaces", dead)
+    r = client.get("/health/ready")
+    assert r.status_code == 503 and r.json()["status"] == "unavailable"
+    assert client.get("/health/uptime").status_code == 503
 
 
 @pytest.mark.config_only
