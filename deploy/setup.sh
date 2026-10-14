@@ -92,7 +92,7 @@ case "$(env_get CADDY_TLS)" in
   ""|admin@example.com) die "set an email for Let's Encrypt (--email), or --tls internal for a trial install" ;;
 esac
 
-for key in POSTGRES_PASSWORD NEO4J_PASSWORD RESTIC_PASSWORD; do
+for key in POSTGRES_PASSWORD NEO4J_PASSWORD RESTIC_PASSWORD GRAFANA_ADMIN_PASSWORD; do
   if [ -z "$(env_get "${key}")" ]; then
     env_set "${key}" "$(random_secret)"
     ok "generated ${key}"

@@ -122,7 +122,9 @@ def embed(texts: list[str]) -> list[list[float]] | None:
     model = get_model()
     if model is None:
         return None
-    vecs = model.encode(texts, normalize_embeddings=True)
+    # No progress bar: it is drawn on stderr whenever logging is at INFO and
+    # breaks the one-JSON-object-per-line log format (brahmastra/logs.py).
+    vecs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
     return [[float(x) for x in v] for v in vecs]
 
 

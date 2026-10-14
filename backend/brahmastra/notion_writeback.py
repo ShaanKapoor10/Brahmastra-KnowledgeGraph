@@ -215,7 +215,9 @@ def push_insights() -> dict[str, Any]:
     except ImportError as e:
         raise RuntimeError("notion-client not installed") from e
 
-    client = Client(auth=token)
+    # Explicit, rather than the library's 60 s default: a Notion outage must
+    # not hold a pipeline stage for a minute per call (docs/RELIABILITY.md).
+    client = Client(auth=token, timeout_ms=int(os.environ.get("NOTION_TIMEOUT_MS", "30000")))
 
     # Publish first, so a note created in this run also gets its insights in
     # the same run rather than waiting for the next one.

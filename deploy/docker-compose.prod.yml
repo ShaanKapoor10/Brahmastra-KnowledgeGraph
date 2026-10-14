@@ -98,6 +98,7 @@ x-app-env: &app-env
   BRAHMASTRA_SETUP_TOKEN: ${BRAHMASTRA_SETUP_TOKEN:-}
   BRAHMASTRA_KEY_ADMIN: ${BRAHMASTRA_KEY_ADMIN:-}
   RATE_LIMITS: ${RATE_LIMITS:-}
+  SNAPSHOT_REFRESH_MINUTES: ${SNAPSHOT_REFRESH_MINUTES:-30}
   HF_HUB_OFFLINE: "1"
   TRANSFORMERS_OFFLINE: "1"
 
@@ -281,10 +282,118 @@ services:
       backend:
         condition: service_healthy
 
+  # ===================================================================== monitoring
+  # Opt in: COMPOSE_PROFILES=monitoring in .env.production (or --profile monitoring).
+  # Prometheus and Grafana listen on 127.0.0.1 only: reach them over an SSH
+  # tunnel (docs/OBSERVABILITY.md), never from the internet.
+
+  prometheus:
+    <<: *hardening
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.55.1
+    read_only: true
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --enable-feature=expand-external-labels
+      - --web.listen-address=0.0.0.0:9090
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    # internal: to scrape the backend; monitoring: the exporters and Alertmanager.
+    networks: [internal, monitoring]
+    mem_limit: 1g
+
+  alertmanager:
+    <<: *hardening
+    profiles: ["monitoring"]
+    image: prom/alertmanager:v0.28.1
+    read_only: true
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      ALERT_RECEIVER: ${ALERT_RECEIVER:-slack}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      WATCHDOG_URL: ${WATCHDOG_URL:-}
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    tmpfs: ["/tmp:size=8m,mode=0700,uid=65534"]
+    # monitoring has outbound access, for the Slack/Teams/webhook receiver.
+    networks: [monitoring]
+    mem_limit: 256m
+
+  grafana:
+    <<: *hardening
+    profiles: ["monitoring"]
+    image: grafana/grafana-oss:11.3.1
+    read_only: true
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run setup.sh, which generates GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SECURITY_COOKIE_SECURE: "false"
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3002}
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    tmpfs: ["/tmp:size=64m"]
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3002}:3000"
+    networks: [monitoring]
+    mem_limit: 512m
+
+  node-exporter:
+    <<: *hardening
+    profiles: ["monitoring"]
+    image: prom/node-exporter:v1.8.2
+    read_only: true
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      # rslave (mount propagation) is the documented setting on Linux hosts.
+      # Docker Desktop cannot propagate mounts: set NODE_EXPORTER_MOUNT=ro there.
+      - /:/host:${NODE_EXPORTER_MOUNT:-ro,rslave}
+    networks: [monitoring]
+    mem_limit: 128m
+
+  # cAdvisor reads every container's cgroups and the Docker state, so it is the
+  # one service that runs privileged -- the documented exception to the
+  # hardening above (docs/OBSERVABILITY.md). It publishes nothing.
+  cadvisor:
+    profiles: ["monitoring"]
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    logging: *logging
+    privileged: true
+    devices: ["/dev/kmsg"]
+    command: ["--docker_only=true", "--housekeeping_interval=30s", "--store_container_labels=true"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [monitoring]
+    mem_limit: 256m
+
 networks:
   edge: {}
   internal:
     internal: true
+  # Exporters, Prometheus, Alertmanager and Grafana. Not internal: Alertmanager
+  # must reach the alert receiver, and Prometheus and Grafana publish on 127.0.0.1.
+  monitoring: {}
 
 volumes:
   brahmastra-data:
@@ -297,3 +406,6 @@ volumes:
   backups:
   backup-scratch:
   ops-state:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:

@@ -34,7 +34,6 @@ not https, BRAHMASTRA_KEY_ADMIN on.
 from __future__ import annotations
 
 import os
-import sys
 
 # Values that appear in this repository's compose files, docs and common
 # examples. A production secret equal to any of them is as good as public.
@@ -108,11 +107,17 @@ def check(*, exit_on_failure: bool = True, check_admin: bool = True) -> list[str
                             "python -m brahmastra.accounts create-admin --email you@example.com")
         except Exception:                                        # noqa: BLE001
             pass                    # the store being down is readiness's job to report
+    import logging
+
+    from brahmastra import logs
+
+    logs.configure()                    # JSON in production, like every other line
+    log = logging.getLogger("brahmastra.preflight")
     for w in warn:
-        print(f"[preflight] WARNING: {w}", file=sys.stderr, flush=True)
+        log.warning(w, extra={"event": "preflight", "outcome": "warning"})
     if refuse:
-        msg = "Refusing to start: unsafe production configuration.\n" + "\n".join(f"  - {r}" for r in refuse)
-        print(f"[preflight] {msg}", file=sys.stderr, flush=True)
+        msg = "Refusing to start: unsafe production configuration. " + " | ".join(refuse)
+        log.error(msg, extra={"event": "preflight", "outcome": "refused"})
         if exit_on_failure:
             raise UnsafeConfiguration(78)       # EX_CONFIG
     return warn

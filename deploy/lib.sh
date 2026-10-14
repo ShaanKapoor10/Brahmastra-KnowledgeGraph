@@ -36,9 +36,12 @@ warn() { printf '%s! %s%s\n' "${YEL}" "$*" "${OFF}" >&2; }
 die()  { printf '%s✗ %s%s\n' "${RED}" "$*" "${OFF}" >&2; exit 1; }
 
 # Read one key from the env file without sourcing it (sourcing would execute it).
+# An absent key is an empty value, not an error: under `set -e -o pipefail` a
+# grep that matches nothing would otherwise end the calling script silently --
+# which is what an optional setting such as NEO4J_DATA_VOLUME did.
 env_get() {
   [ -f "${ENV_FILE}" ] || return 0
-  grep -E "^$1=" "${ENV_FILE}" | tail -n 1 | cut -d= -f2-
+  { grep -E "^$1=" "${ENV_FILE}" || true; } | tail -n 1 | cut -d= -f2-
 }
 
 # Set one key in the env file, in place. The value never reaches the terminal.

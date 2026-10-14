@@ -1,0 +1,211 @@
+# Recording and alerting rules. The objectives and the error-budget policy are
+# in docs/RELIABILITY.md; what to DO for each alert is in docs/RUNBOOK.md (every
+# alert links its section). Validate with: promtool check rules <this file>
+#
+# SLIs are measured at the backend's request middleware (server-side, every
+# request, route template labels), over a 30-day rolling window. Excluded from
+# the API SLIs: health and metrics probes, and the long-running routes that
+# have their own objectives or none (/ask, pipeline runs, transcript ingest).
+
+groups:
+  # ----------------------------------------------------------------- SLIs
+  - name: brahmastra-sli
+    interval: 30s
+    rules:
+      - record: brahmastra:api_requests:rate5m
+        expr: sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[5m]))
+      - record: brahmastra:api_errors:rate5m
+        expr: sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",status_class="5xx"}[5m]))
+      # Error ratio over each burn-rate window (multi-window, multi-burn-rate:
+      # Google SRE Workbook, "Alerting on SLOs").
+      - record: brahmastra:api_error_ratio:rate5m
+        expr: brahmastra:api_errors:rate5m / clamp_min(brahmastra:api_requests:rate5m, 1e-9)
+      - record: brahmastra:api_error_ratio:rate30m
+        expr: |
+          sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",status_class="5xx"}[30m]))
+          / clamp_min(sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[30m])), 1e-9)
+      - record: brahmastra:api_error_ratio:rate1h
+        expr: |
+          sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",status_class="5xx"}[1h]))
+          / clamp_min(sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[1h])), 1e-9)
+      - record: brahmastra:api_error_ratio:rate6h
+        expr: |
+          sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",status_class="5xx"}[6h]))
+          / clamp_min(sum(rate(brahmastra_http_requests_total{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[6h])), 1e-9)
+      # Latency SLI: the share of API requests SLOWER than 1.5 s.
+      - record: brahmastra:api_slow_ratio:rate1h
+        expr: |
+          1 - (
+            sum(rate(brahmastra_http_request_duration_seconds_bucket{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",le="1.5"}[1h]))
+            / clamp_min(sum(rate(brahmastra_http_request_duration_seconds_count{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[1h])), 1e-9))
+      - record: brahmastra:api_slow_ratio:rate6h
+        expr: |
+          1 - (
+            sum(rate(brahmastra_http_request_duration_seconds_bucket{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*",le="1.5"}[6h]))
+            / clamp_min(sum(rate(brahmastra_http_request_duration_seconds_count{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[6h])), 1e-9))
+      # /ask SLI: the share of answers slower than 10 s.
+      - record: brahmastra:ask_slow_ratio:rate1h
+        expr: |
+          1 - (sum(rate(brahmastra_ask_duration_seconds_bucket{le="10.0"}[1h]))
+               / clamp_min(sum(rate(brahmastra_ask_duration_seconds_count[1h])), 1e-9))
+      - record: brahmastra:api_p95_latency_seconds:rate5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(brahmastra_http_request_duration_seconds_bucket{route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"}[5m])))
+
+  # ----------------------------------------------------------------- SLO alerts
+  - name: brahmastra-slo
+    rules:
+      # Availability objective 99.5% (budget 0.5%). Fast burn: 14.4x spends 2%
+      # of the monthly budget in an hour -- page. Slow burn: 6x spends 5% in 6h.
+      - alert: BrahmastraErrorBudgetFastBurn
+        expr: brahmastra:api_error_ratio:rate1h > (14.4 * 0.005) and brahmastra:api_error_ratio:rate5m > (14.4 * 0.005)
+        for: 2m
+        labels: {severity: critical, slo: availability}
+        annotations:
+          summary: "API errors are burning the monthly error budget 14x too fast"
+          description: "{{ $value | humanizePercentage }} of API requests failed over the last hour (objective: 99.5% succeed)."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#error-budget-burn"
+      - alert: BrahmastraErrorBudgetSlowBurn
+        expr: brahmastra:api_error_ratio:rate6h > (6 * 0.005) and brahmastra:api_error_ratio:rate30m > (6 * 0.005)
+        for: 15m
+        labels: {severity: warning, slo: availability}
+        annotations:
+          summary: "API errors are burning the error budget 6x too fast"
+          description: "{{ $value | humanizePercentage }} of API requests failed over 6 hours."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#error-budget-burn"
+      # Latency objective: 99% of API requests within 1.5 s (budget 1%).
+      - alert: BrahmastraLatencyBudgetBurn
+        expr: brahmastra:api_slow_ratio:rate1h > (14.4 * 0.01) or brahmastra:api_slow_ratio:rate6h > (6 * 0.01)
+        for: 10m
+        labels: {severity: warning, slo: latency}
+        annotations:
+          summary: "Too many API requests are slower than 1.5 s"
+          description: "{{ $value | humanizePercentage }} of API requests exceeded 1.5 s (objective: at most 1%)."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#slow-api"
+      # /ask objective: 95% of answers within 10 s (budget 5%).
+      - alert: BrahmastraAskLatencyBurn
+        expr: brahmastra:ask_slow_ratio:rate1h > 0.25 and sum(rate(brahmastra_ask_duration_seconds_count[1h])) > 0.002
+        for: 15m
+        labels: {severity: warning, slo: ask_latency}
+        annotations:
+          summary: "Ask is answering too slowly"
+          description: "{{ $value | humanizePercentage }} of Ask answers took more than 10 s in the last hour (objective: at most 5%)."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#slow-ask"
+
+  # ----------------------------------------------------------------- symptoms
+  - name: brahmastra-health
+    rules:
+      - alert: BrahmastraDown
+        expr: up{job="brahmastra"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The Brahmastra API is not answering"
+          description: "Prometheus cannot scrape the backend. The dashboard and every client are affected."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#api-down"
+      - alert: BrahmastraGraphEngineDown
+        expr: brahmastra_graph_up == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "The knowledge-graph engine (Neo4j) is unavailable; the product is degraded"
+          description: "Notes, search and Ask still work; the dashboard shows the last saved graph with a banner."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#graph-engine-down"
+      - alert: BrahmastraGraphSnapshotStale
+        expr: brahmastra_graph_snapshot_age_seconds > 6 * 3600 and on() brahmastra_graph_up == 1
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "The outage copy of the graph is not being refreshed"
+          description: "Workspace {{ $labels.workspace }}: copy is {{ $value | humanizeDuration }} old while the engine is up."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#snapshot-stale"
+      - alert: BrahmastraPipelineFailing
+        expr: brahmastra_pipeline_last_run_ok == 0
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "The pipeline's last run in {{ $labels.workspace }} failed"
+          description: "New notes are not reaching the graph."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#pipeline-failing"
+      - alert: BrahmastraLLMErrors
+        expr: |
+          sum(rate(brahmastra_llm_calls_total{outcome!="ok"}[15m])) / clamp_min(sum(rate(brahmastra_llm_calls_total[15m])), 1e-9) > 0.2
+          and sum(rate(brahmastra_llm_calls_total[15m])) > 0.01
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 20% of LLM calls are failing"
+          description: "Extraction and Ask are degraded. Check provider keys, quota and status."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#llm-errors"
+
+  # ----------------------------------------------------------------- backups
+  - name: brahmastra-backups
+    rules:
+      - alert: BrahmastraBackupFailed
+        expr: brahmastra_backup_last_attempt_ok == 0
+        labels: {severity: critical}
+        annotations:
+          summary: "The last backup failed"
+          description: "Earlier backups are intact, but today's is missing."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#backup-failed"
+      - alert: BrahmastraBackupStale
+        expr: time() - brahmastra_backup_last_success_timestamp_seconds > 26 * 3600
+        labels: {severity: critical}
+        annotations:
+          summary: "No successful backup for more than 26 hours"
+          description: "The newest good backup is {{ $value | humanizeDuration }} old."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#backup-failed"
+      - alert: BrahmastraBackupNeverSucceeded
+        expr: absent(brahmastra_backup_last_success_timestamp_seconds) and on() up{job="brahmastra"} == 1
+        for: 26h
+        labels: {severity: critical}
+        annotations:
+          summary: "This install has never completed a backup"
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#backup-failed"
+      - alert: BrahmastraRestoreTestFailing
+        expr: brahmastra_restore_test_last_attempt_ok == 0 or time() - brahmastra_restore_test_last_success_timestamp_seconds > 8 * 86400
+        labels: {severity: critical}
+        annotations:
+          summary: "The weekly restore test failed or has not passed in 8 days"
+          description: "Backups may not be restorable."
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#restore-test-failing"
+
+  # ----------------------------------------------------------------- host and containers
+  - name: brahmastra-host
+    rules:
+      # Local disks only: network and virtual filesystems (9p, NFS, CIFS, FUSE) are
+      # not this host's to fill, and Docker Desktop mounts every Windows drive as 9p.
+      - alert: HostDiskFillingUp
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|9p|nfs4?|cifs|fuse.*|rootfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|9p|nfs4?|cifs|fuse.*|rootfs"} < 0.10)
+          or predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|9p|nfs4?|cifs|fuse.*|rootfs"}[6h], 24 * 3600) < 0
+        for: 15m
+        labels: {severity: critical}
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} is nearly full or will fill within a day"
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#disk-full"
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.08
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Host memory is below 8% available"
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#memory"
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{container_label_com_docker_compose_service!=""}[30m]) > 2
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.container_label_com_docker_compose_service }} restarted more than twice in 30 minutes"
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#container-restarting"
+
+  # ----------------------------------------------------------------- the alerting pipeline itself
+  - name: brahmastra-meta
+    rules:
+      # Always firing. Route it to a dead-man's switch (WATCHDOG_URL), which
+      # alarms when it STOPS arriving -- the only way to notice that alerting
+      # itself is broken.
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none}
+        annotations:
+          summary: "Alerting pipeline heartbeat"
+          runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#watchdog"

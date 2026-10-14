@@ -1066,13 +1066,17 @@ class Neo4jStore(GraphStore):
         blob, so what the UI renders is the graph itself and the two can no
         longer drift apart.
         """
-        meta = self._run(
-            "MATCH (g:GraphMeta {workspaceId: $ws}) RETURN g.builtAt AS builtAt, "
-            "g.statsJson AS statsJson",
+        # properties(g), not g.builtAt / g.statsJson: naming a property key the
+        # database has never stored -- every fresh install, until the first
+        # build -- makes the server warn "property key does not exist" on each
+        # call. Reading the map names no keys.
+        rows = self._run(
+            "MATCH (g:GraphMeta {workspaceId: $ws}) RETURN properties(g) AS p",
             ws=self.workspace,
         )
-        if not meta:
+        if not rows:
             return None
+        meta = [{"builtAt": rows[0]["p"].get("builtAt"), "statsJson": rows[0]["p"].get("statsJson")}]
 
         node_rows = self._run(
             """

@@ -182,6 +182,9 @@ class PostgresStore(GraphStore):
                 self._dsn,
                 autocommit=True,
                 connect_timeout=int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "10")),
+                # A ceiling on every statement, so one runaway query cannot hold
+                # a connection (and the request waiting on it) indefinitely.
+                options=f"-c statement_timeout={int(os.environ.get('POSTGRES_STATEMENT_TIMEOUT_MS', '60000'))}",
             )
             self._conn.row_factory = __import__(
                 "psycopg.rows", fromlist=["dict_row"]

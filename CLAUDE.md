@@ -111,6 +111,27 @@ failure each defence came from, and where to take this next.
 
 ---
 
+## Production install (branch product/launch): read before changing ops code
+
+- **Deploy:** `deploy/` (compose, Caddy, setup/upgrade/rebuild-graph scripts,
+  backups). Guides: docs/DEPLOY_VPS.md, docs/OPERATIONS.md.
+- **Objectives and alerts:** docs/RELIABILITY.md; what to do for each alert:
+  docs/RUNBOOK.md (every alert links a heading, enforced by
+  `tests/test_ops_docs.py`).
+- **A Neo4j outage is DEGRADED, not down.** Readiness and uptime return 200
+  `degraded`; graph routes serve the Postgres snapshot (`graph_snapshot.py`);
+  Ask answers from notes. Only Postgres down is 503. Neo4j calls go through
+  the circuit breaker in `graph_health.py`.
+- **Every graph write must be rebuildable from Postgres**
+  (`tests/test_graph_write_contract.py`). Meeting records regenerate via
+  `ingest/records.py`.
+- **Logs are allowlisted fields only** (`logs.py`). Never log bodies, query
+  strings, headers, prompts or emails.
+- **Metrics** (`metrics.py`) are internal; Caddy blocks `/metrics`, tested by
+  `deploy/tests/edge-test.sh`.
+- **Startup refuses unsafe production config** (`preflight.py`, exit 78).
+- **Accounts and roles:** `accounts.py`, `auth.py`; remote MCP is admin-only.
+
 ## What is left to build
 
 **`docs/ROADMAP.md`** carries the backlog, each item with the measurement that put

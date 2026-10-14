@@ -1,0 +1,39 @@
+# Alertmanager routing. entrypoint.sh appends the `team` receiver for the
+# chosen ALERT_RECEIVER (receivers/<kind>.yml); secrets are read from files it
+# writes from the environment, never stored in this config.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: team
+  group_by: [alertname, workspace]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # The always-firing Watchdog goes to the dead-man's switch, every minute,
+    # and to nothing else.
+    - matchers: [alertname="Watchdog"]
+      receiver: watchdog
+      repeat_interval: 1m
+      group_wait: 0s
+    # Pages repeat sooner than warnings.
+    - matchers: [severity="critical"]
+      receiver: team
+      repeat_interval: 1h
+
+inhibit_rules:
+  # When the API is down, everything measured through it is noise.
+  - source_matchers: [alertname="BrahmastraDown"]
+    target_matchers: [severity=~"warning|critical"]
+    equal: [instance]
+  # A degraded graph explains a burst of Ask latency.
+  - source_matchers: [alertname="BrahmastraGraphEngineDown"]
+    target_matchers: [alertname="BrahmastraAskLatencyBurn"]
+
+receivers:
+  - name: "null"
+  - name: watchdog
+    webhook_configs:
+      - url_file: /tmp/am/watchdog_url
+        send_resolved: false

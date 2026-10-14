@@ -69,7 +69,12 @@ ENV PYTHONUNBUFFERED=1 \
     # loses nothing and stops the image asserting an answer it should not have.
     BRAHMASTRA_DB=/data/concept_graph.db \
     BRAHMASTRA_CHECKPOINT_DIR=/data/checkpoints \
-    PORT=8001
+    PORT=8001 \
+    # Progress bars are not logs: the embedding library draws them on stderr
+    # whenever the log level is INFO, and they break one-JSON-object-per-line.
+    TQDM_DISABLE=1 \
+    HF_HUB_DISABLE_PROGRESS_BARS=1 \
+    TRANSFORMERS_VERBOSITY=error
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -90,6 +95,9 @@ RUN useradd --system --create-home --uid 10001 brahmastra \
 WORKDIR /app
 COPY --from=builder /build/brahmastra /app/brahmastra
 COPY --from=builder /build/main.py /app/main.py
+# uvicorn's own lines (startup, the supervisor of the workers) use the same JSON
+# formatter as the app, so every line on stdout is one JSON object.
+COPY log-config.json /app/log-config.json
 
 USER brahmastra
 EXPOSE 8001
@@ -112,4 +120,4 @@ ENV WEB_CONCURRENCY=1
 # (EX_CONFIG) rather than a traceback from inside uvicorn's startup.
 # PROMETHEUS_MULTIPROC_DIR is emptied first: each worker's metric files live
 # there, and files left by a previous container would be counted again.
-CMD ["sh", "-c", "python -m brahmastra.preflight --enforce && if [ -n \"$PROMETHEUS_MULTIPROC_DIR\" ]; then rm -rf \"$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\"; fi && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1} --no-access-log"]
+CMD ["sh", "-c", "python -m brahmastra.preflight --enforce && if [ -n \"$PROMETHEUS_MULTIPROC_DIR\" ]; then rm -rf \"$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\"; fi && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1} --no-access-log --log-config /app/log-config.json"]

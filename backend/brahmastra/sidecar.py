@@ -83,6 +83,7 @@ class SidecarStore:
                 dsn(),
                 autocommit=True,
                 connect_timeout=int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "10")),
+                options=f"-c statement_timeout={int(os.environ.get('POSTGRES_STATEMENT_TIMEOUT_MS', '60000'))}",
             )
             conn.row_factory = dict_row
             try:

@@ -1,0 +1,4 @@
+  - name: team
+    webhook_configs:
+      - url_file: /tmp/am/receiver_url
+        send_resolved: true

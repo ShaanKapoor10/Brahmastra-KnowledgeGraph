@@ -66,10 +66,22 @@ export async function backendHeaders(extra?: HeadersInit): Promise<Headers> {
   return headers
 }
 
+// Timeout budgets (docs/RELIABILITY.md). Routes that wait on a language model
+// get longer; everything else fails fast, so a stuck backend cannot pin the
+// dashboard's server threads.
+const SLOW_ROUTES = /^\/(ask|pipeline|ingest\/transcripts)/
+const TIMEOUT_MS = { normal: 30_000, slow: 180_000 }
+
 /** fetch() against the backend as the signed-in user. Server only. */
 export async function backendFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const url = `${BACKEND_URL}${path.startsWith("/") ? path : `/${path}`}`
-  return fetch(url, { ...init, headers: await backendHeaders(init.headers) })
+  const route = path.startsWith("/") ? path : `/${path}`
+  const url = `${BACKEND_URL}${route}`
+  const budget = SLOW_ROUTES.test(route) ? TIMEOUT_MS.slow : TIMEOUT_MS.normal
+  return fetch(url, {
+    ...init,
+    headers: await backendHeaders(init.headers),
+    signal: init.signal ?? AbortSignal.timeout(budget),
+  })
 }
 
 /**

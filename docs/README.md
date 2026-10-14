@@ -8,6 +8,10 @@
 | [How it works](HOW_IT_WORKS.md) | The architecture, layer by layer, and the design behind it |
 | [Deploy on a VPS](DEPLOY_VPS.md) | Production install on one server: host hardening, HTTPS, accounts, encrypted off-host backups |
 | [Operations](OPERATIONS.md) | Backups, restore tests, disaster recovery, upgrades with rollback, rebuilding the graph, the migration rule |
+| [Reliability](RELIABILITY.md) | Objectives (SLOs), error-budget policy, timeout and retry budgets, what works when a dependency is down |
+| [Runbook](RUNBOOK.md) | What to do for every alert |
+| [Observability](OBSERVABILITY.md) | Logs, traces, metrics, the monitoring bundle, and the log retention and privacy policy |
+| [Postmortem template](POSTMORTEM_TEMPLATE.md) | Blameless incident review |
 | [Deployment](DEPLOYMENT.md) | Running Brahmastra for a team: authentication, hosted Neo4j, MCP over HTTP, health probes |
 | [Platforms](PLATFORMS.md) | Choosing a host: memory requirements and what each platform supports |
 | [Roadmap](ROADMAP.md) | What is planned next, and the evidence behind each item |
