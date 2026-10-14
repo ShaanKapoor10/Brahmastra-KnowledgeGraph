@@ -55,7 +55,7 @@ decrypted, by anyone.
 bctl stop backend frontend scheduler
 bctl run --rm backup restore --from latest --yes     # or a dump name / snapshot id
 bctl up -d
-# then rebuild the graph from the restored notes (next section)
+cd deploy && ./rebuild-graph.sh --accept-differences   # rebuild the graph from the restored notes
 ```
 
 `restore --from` accepts `latest`, a file name from `restore --list`, or a
@@ -69,28 +69,55 @@ Measured on the trial install (6.9 MB dump, 160 notes): the restore took
 ## Rebuilding the graph
 
 ```bash
-bctl exec backend python -c "from brahmastra.pipeline import run_pipeline; print(run_pipeline(full=True)['status'])"
+cd deploy && ./rebuild-graph.sh                       # rebuild, verify, swap
+./rebuild-graph.sh --accept-differences               # after a restore or an ontology change
+./rebuild-graph.sh --rollback                         # back to the previous graph
 ```
 
-**Measured** on 13 Oct 2026, after restoring a copy of a real 160-note
-database into an empty graph (2 vCPU-class container, local Neo4j):
+**Blue/green, so readers never see a half-built graph.** The live graph keeps
+serving from one Neo4j volume. Meanwhile the script:
 
-| | |
-|---|---|
-| Time | **123 s** |
-| Result | 1,572 facts, 1,432 entity groups, status `ok` |
-| LLM cost | low: most extraction was served from the reply cache, which is in the backup |
+1. **Fingerprints the live graph.** Every fact is hashed by content and grouped
+   by where its note came from.
+2. **Rebuilds every workspace into an empty shadow Neo4j** on the other volume.
+   The rebuild only reads Postgres: Notion and the checkpoint queue are off for
+   it.
+3. **Compares the fingerprints per note source.** A difference stops the swap
+   unless you pass `--accept-differences`.
+4. **Swaps volumes, then checks** the graph now serving is the one that was
+   built. On any failure it switches back.
 
-Expect roughly **1 s per note warm**. A cold rebuild (cache lost, or the
-extraction model changed) calls the LLM once per note and is bounded by the
-provider's rate limit. On Groq's free tier that is several minutes per hundred
-notes, and failed notes retry on the next run.
+The previous graph stays on its volume for `--rollback` until the next
+rebuild. A rebuild needs room for a second Neo4j (`NEO4J_MEMORY`) while it runs.
 
-**Known gap:** the restored install held 1,805 facts before the rebuild and
-1,572 after it (87%). The likely difference is records written directly during
-meeting ingestion rather than extracted from notes. Until that is settled,
-treat "rebuild from notes" as restoring the note-derived graph, and re-process
-meeting transcripts (`/ingest/transcripts/{id}/reprocess`) after a recovery.
+After a disaster recovery the live graph is empty, so the comparison
+necessarily differs: use `--accept-differences`.
+
+**What a rebuild reproduces.** Every fact must be recomputable from Postgres.
+On 13 Oct 2026 a content-hash comparison of a real 1,835-fact graph against a
+rebuild found:
+- every fact extracted from notes (mcp, checkpoint, transcript, Notion and
+  untagged notes) reproduced **exactly** (1,584/1,584);
+- the only gap was one meeting record's 251 facts, which ingestion writes
+  straight into the graph.
+
+Those are now regenerated from the stored meeting findings
+(`brahmastra/ingest/records.py`, with no model calls). A test
+(`tests/test_graph_write_contract.py`) fails if any new code writes graph
+facts that a rebuild cannot reproduce.
+
+**Time.** 123 s for 160 notes inside the stack with a warm reply cache.
+Every pipeline result now reports per-stage `timings_s`. A cold rebuild (cache
+lost, or the extraction model changed) calls the LLM once per note and is
+bounded by the provider's rate limit.
+
+Run inside the backend only to rebuild in place (development; single-store
+SQLite):
+
+```bash
+bctl exec backend python -m brahmastra.rebuild --rebuild-all
+bctl exec backend python -m brahmastra.rebuild --fingerprint      # content fingerprint, per workspace
+```
 
 ## Upgrades
 

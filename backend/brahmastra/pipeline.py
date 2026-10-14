@@ -412,6 +412,19 @@ def _notion_source() -> str | None:
         return None
 
 
+def _timed(result: dict[str, Any], stage: str, fn, *args, **kwargs):
+    """Run one stage and record its wall time in result['timings_s'].
+
+    A full rebuild took 123 s in one environment and 1,007 s in another, and
+    nothing said where the difference went. Per-stage time is the first
+    question to ask of a slow run, so every run answers it."""
+    started = time.perf_counter()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        result.setdefault("timings_s", {})[stage] = round(time.perf_counter() - started, 2)
+
+
 def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # ---------------------------------------------------------------
     # Stage 0: Notion sync (pull needs both the token and a target)
@@ -449,8 +462,23 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # ---------------------------------------------------------------
     from brahmastra.extraction import run_extraction
 
-    extract_result = run_extraction(full=full)
+    extract_result = _timed(result, "extract", run_extraction, full=full)
     result["stages"]["extract"] = extract_result
+
+    # ---------------------------------------------------------------
+    # Stage: meeting records (full rebuilds only)
+    # ---------------------------------------------------------------
+    # Facts ingestion declared straight into the graph, which extraction
+    # never reproduces. Regenerated from Postgres, with no model call, so a
+    # rebuild restores ALL of the graph -- see ingest/records.py for the gap
+    # this closes. Incremental runs skip it: ingestion keeps records current.
+    if full:
+        try:
+            from brahmastra.ingest.records import regenerate
+
+            result["stages"]["records"] = _timed(result, "records", regenerate)
+        except Exception as exc:                          # noqa: BLE001
+            result["stages"]["records"] = {"error": str(exc)}
 
     # ---------------------------------------------------------------
     # Stage: resolve
@@ -462,7 +490,7 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # graph this run builds, so it is what staleness is cleared against. See
     # run_pipeline for why the run's START was the wrong cutoff.
     result["_inputs_read_at"] = time.time()
-    resolve_result = run_resolution()
+    resolve_result = _timed(result, "resolve", run_resolution)
     # Don't embed the full cluster list in the pipeline response — too large.
     result["stages"]["resolve"] = {
         "clusters": resolve_result["clusters"],
@@ -484,7 +512,7 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # ---------------------------------------------------------------
     from brahmastra.concept_graph import run_build_graph
 
-    graph_result = run_build_graph()
+    graph_result = _timed(result, "graph", run_build_graph)
     result["stages"]["graph"] = {
         "nodes": graph_result["stats"]["nodes"],
         "edges": graph_result["stats"]["edges"],
@@ -501,7 +529,7 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # ---------------------------------------------------------------
     try:
         from brahmastra.cluster_summary import run_cluster_summaries
-        result["stages"]["cluster_summaries"] = run_cluster_summaries()
+        result["stages"]["cluster_summaries"] = _timed(result, "cluster_summaries", run_cluster_summaries)
     except Exception as exc:
         result["stages"]["cluster_summaries"] = {"error": str(exc)}
 

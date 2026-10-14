@@ -42,6 +42,31 @@ x-hardening: &hardening
   restart: unless-stopped
   logging: *logging
 
+x-neo4j: &neo4j
+  <<: *hardening
+  image: neo4j:5.26.2-community
+  cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+  environment:
+    NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+    # Explicit memory, so the JVM sizes itself to this container rather than
+    # to the host, and so heap + page cache + overhead fit inside mem_limit.
+    NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP:-512m}
+    NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-512m}
+    NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512m}
+    NEO4J_PLUGINS: '[]'
+    # Not NEO4J_*: the image turns every NEO4J_ variable into a server setting.
+    HEALTHCHECK_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+  tmpfs: ["/tmp:size=128m"]
+  networks: [internal]
+  mem_limit: ${NEO4J_MEMORY:-2g}
+  healthcheck:
+    # Bolt, with a real query: HTTP answers before Bolt does.
+    test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$HEALTHCHECK_PASSWORD\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+    interval: 10s
+    timeout: 10s
+    retries: 15
+    start_period: 40s
+
 x-app-env: &app-env
   BRAHMASTRA_ENV: production
   BRAHMASTRA_VERSION: ${BRAHMASTRA_VERSION:?set BRAHMASTRA_VERSION in .env.production}
@@ -167,32 +192,20 @@ services:
       start_period: 20s
 
   neo4j:
-    <<: *hardening
-    image: neo4j:5.26.2-community
-    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
-    environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
-      # Explicit memory, so the JVM sizes itself to this container rather than
-      # to the host, and so heap + page cache + overhead fit inside mem_limit.
-      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP:-512m}
-      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-512m}
-      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512m}
-      NEO4J_PLUGINS: '[]'
-      # Not NEO4J_*: the image turns every NEO4J_ variable into a server setting.
-      HEALTHCHECK_PASSWORD: ${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
+    <<: *neo4j
     volumes:
-      - neo4j-data:/data
+      # Blue/green: the graph lives on one of two volumes. deploy/rebuild-graph.sh
+      # rebuilds into the other one, verifies it, then points this at it.
+      - ${NEO4J_DATA_VOLUME:-neo4j-data}:/data
       - neo4j-logs:/logs
-    tmpfs: ["/tmp:size=128m"]
-    networks: [internal]
-    mem_limit: ${NEO4J_MEMORY:-2g}
-    healthcheck:
-      # Bolt, with a real query: HTTP answers before Bolt does.
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$HEALTHCHECK_PASSWORD\" 'RETURN 1' >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 15
-      start_period: 40s
+
+  # Only during a rebuild (deploy/rebuild-graph.sh): an empty Neo4j on the
+  # INACTIVE volume, which the rebuild fills while the live graph keeps serving.
+  neo4j-shadow:
+    <<: *neo4j
+    profiles: ["rebuild"]
+    volumes:
+      - ${NEO4J_SHADOW_VOLUME:-neo4j-data-b}:/data
 
   backup:
     <<: *hardening
@@ -269,6 +282,7 @@ volumes:
   brahmastra-data:
   postgres-data:
   neo4j-data:
+  neo4j-data-b:
   neo4j-logs:
   caddy-data:
   caddy-config:
