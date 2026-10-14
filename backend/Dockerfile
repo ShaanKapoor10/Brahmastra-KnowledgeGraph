@@ -105,7 +105,11 @@ sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','
 # pipeline lock is per store, not per process. Scale out only with
 # GRAPH_BACKEND=neo4j, and raise WEB_CONCURRENCY there.
 ENV WEB_CONCURRENCY=1
+# --no-access-log: uvicorn's access log prints raw paths with query strings,
+# and search text lives there; main.trace_and_log logs route templates instead.
 # The production safety check runs first, as its own step, so an unsafe
 # configuration ends the container with a readable list and exit code 78
 # (EX_CONFIG) rather than a traceback from inside uvicorn's startup.
-CMD ["sh", "-c", "python -m brahmastra.preflight --enforce && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1}"]
+# PROMETHEUS_MULTIPROC_DIR is emptied first: each worker's metric files live
+# there, and files left by a previous container would be counted again.
+CMD ["sh", "-c", "python -m brahmastra.preflight --enforce && if [ -n \"$PROMETHEUS_MULTIPROC_DIR\" ]; then rm -rf \"$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\"; fi && exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8001} --workers ${WEB_CONCURRENCY:-1} --no-access-log"]

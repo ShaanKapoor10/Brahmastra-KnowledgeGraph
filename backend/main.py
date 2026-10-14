@@ -20,11 +20,14 @@ load_env()
 
 from typing import Any
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from brahmastra.auth import auth_status, require_api_key
+from brahmastra import logs as _logs
+
+_logs.configure()
 from brahmastra.db import init_db
 from brahmastra.routers import notes, pipeline, graph, ask, paths, workspaces, entities, diagnostics
 from brahmastra.routers import auth_routes
@@ -208,10 +211,51 @@ async def bind_workspace(request, call_next):
             )
 
     token = set_request_workspace(requested or None)
+    from brahmastra.workspace import current_workspace
+
+    request.state.workspace = current_workspace()
     try:
         return await call_next(request)
     finally:
         reset_request_workspace(token)
+
+
+@app.middleware("http")
+async def trace_and_log(request, call_next):
+    """
+    Outermost: a W3C trace for the request, and one allowlisted log line for it
+    (brahmastra/logs.py). The ROUTE TEMPLATE is logged, never the concrete path
+    or its query string, and never a body or a header.
+    """
+    import time as _time
+
+    trace_id, span_id = _logs.start_span(request.headers.get("traceparent"))
+    started = _time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["traceparent"] = _logs.traceparent(trace_id, span_id)
+        return response
+    finally:
+        route = getattr(request.scope.get("route"), "path", None) or (
+            "/mcp" if request.url.path.startswith("/mcp") else "unmatched")
+        elapsed = _time.perf_counter() - started
+        try:
+            from brahmastra import metrics as _metrics
+
+            _metrics.observe_request(request.method, route, status_code, elapsed)
+        except Exception:                                # noqa: BLE001
+            pass
+        identity = getattr(request.state, "identity", None)
+        if route not in ("/health", "/health/ready", "/health/uptime", "/metrics"):
+            _logs.request_log.info(
+                "request", extra={
+                    "event": "request", "method": request.method, "route": route, "status": status_code,
+                    "duration_ms": round(elapsed * 1000, 1),
+                    "workspace": getattr(request.state, "workspace", None),
+                    "user_id": getattr(identity, "user_id", None),
+                    "identity": getattr(identity, "kind", None)})
 
 # Remote MCP. The same tools a local stdio server exposes, over HTTP, mounted
 # inside this app on purpose: it inherits the auth middleware above, so there
@@ -279,6 +323,25 @@ async def health() -> dict[str, Any]:
     # database -- so it stays inside the liveness probe. See version.py for the
     # two ways this system has run stale code without anything noticing.
     return {"status": "ok", "service": "brahmastra", "code": version.status()}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint(request: Request) -> Response:
+    """
+    Prometheus metrics (brahmastra/metrics.py). INTERNAL: open to the scraper on
+    the internal network, refused for anything that came through a proxy --
+    Caddy blocks the path too, so this is the second layer, not the only one.
+    """
+    if request.headers.get("x-forwarded-for"):
+        return Response(status_code=404)
+    import asyncio
+    import contextvars
+
+    from brahmastra import metrics as _metrics
+
+    ctx = contextvars.copy_context()
+    body, content_type = await asyncio.get_running_loop().run_in_executor(None, ctx.run, _metrics.render)
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/health/uptime")

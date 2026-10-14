@@ -16,7 +16,7 @@
  * trusted people can reach (a laptop, a private network) and that has no
  * accounts yet. It is an explicit opt-in because it hands every visitor admin.
  */
-import { cookies } from "next/headers"
+import { cookies, headers as requestHeaders } from "next/headers"
 
 export const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8001"
 export const SESSION_COOKIE = "brahmastra_session"
@@ -31,8 +31,32 @@ export async function sessionToken(): Promise<string | undefined> {
   }
 }
 
+const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/
+
+function hex(bytes: number): string {
+  const a = new Uint8Array(bytes)
+  crypto.getRandomValues(a)
+  return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("")
+}
+
+/**
+ * W3C Trace Context for the backend call: continue the incoming trace (a proxy
+ * in front may have started one), else start one here. The backend logs its
+ * trace id on every line and returns it, so one id finds a request everywhere.
+ */
+async function traceparentFor(): Promise<string> {
+  try {
+    const incoming = (await requestHeaders()).get("traceparent")?.toLowerCase()
+    if (incoming && TRACEPARENT.test(incoming)) return `00-${incoming.slice(3, 35)}-${hex(8)}-01`
+  } catch {
+    // Outside a request (build time): start a fresh trace.
+  }
+  return `00-${hex(16)}-${hex(8)}-01`
+}
+
 export async function backendHeaders(extra?: HeadersInit): Promise<Headers> {
   const headers = new Headers(extra)
+  if (!headers.has("traceparent")) headers.set("traceparent", await traceparentFor())
   const session = await sessionToken()
   if (session) {
     headers.set("Authorization", `Bearer ${session}`)

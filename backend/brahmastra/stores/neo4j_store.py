@@ -927,9 +927,8 @@ class Neo4jStore(GraphStore):
         rows = self._run(
             """
             MATCH (e:Entity) WHERE e.workspaceId = $ws
-            OPTIONAL MATCH (m:Mention)-[:RESOLVES_TO]->(e)
             RETURN e.clusterId AS cluster_id, e.name AS canonical_name,
-                   collect(m.text) AS mentions
+                   COLLECT { MATCH (m:Mention)-[:RESOLVES_TO]->(e) RETURN m.text } AS mentions
             """,
             ws=self.workspace,
         )
@@ -1399,18 +1398,22 @@ class Neo4jStore(GraphStore):
 
     def stats(self) -> dict[str, int]:
         r = self._run(
+            # COUNT {} subqueries rather than OPTIONAL MATCH + count(): the
+            # old form counted over null rows and the server answered every
+            # stats call with "null value eliminated in set function"; and it
+            # named the ASSERTS relationship type, which an empty database has
+            # never seen, adding "relationship type does not exist". Both
+            # flooded the logs on every readiness probe. Matching the type by
+            # name needs no type token, so a fresh database is silent too.
             """
-            OPTIONAL MATCH (n:Note) WHERE n.workspaceId = $ws
-              WITH count(n) AS notes
-            OPTIONAL MATCH (p:Note) WHERE p.workspaceId = $ws
-              AND p.extractionStatus = 'pending'
-              WITH notes, count(p) AS pending
-            OPTIONAL MATCH (a:Mention)-[t:ASSERTS]->() WHERE a.workspaceId = $ws
-              WITH notes, pending, count(t) AS triples
-            OPTIONAL MATCH (e:Entity) WHERE e.workspaceId = $ws
-              WITH notes, pending, triples, count(e) AS entities
-            OPTIONAL MATCH (g:GraphMeta) WHERE g.workspaceId = $ws
-              RETURN notes, pending, triples, entities, count(g) AS meta
+            RETURN
+              COUNT { MATCH (n:Note) WHERE n.workspaceId = $ws } AS notes,
+              COUNT { MATCH (p:Note) WHERE p.workspaceId = $ws
+                        AND p.extractionStatus = 'pending' } AS pending,
+              COUNT { MATCH (a:Mention)-[t]->() WHERE a.workspaceId = $ws
+                        AND type(t) = 'ASSERTS' } AS triples,
+              COUNT { MATCH (e:Entity) WHERE e.workspaceId = $ws } AS entities,
+              COUNT { MATCH (g:GraphMeta) WHERE g.workspaceId = $ws } AS meta
             """,
             ws=self.workspace,
         )[0]

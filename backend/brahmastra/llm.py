@@ -462,7 +462,47 @@ def active_model() -> str:
 # Unified chat
 # ---------------------------------------------------------------------------
 
-def chat(
+def chat(system: str, user: str, **kwargs: Any) -> str:
+    """
+    Every LLM call in the system, measured (brahmastra/metrics.py): calls by
+    provider and outcome, latency, and characters each way. The work is
+    _chat_unmeasured; this wrapper only counts it, and never fails a call
+    because a metric could not be recorded.
+    """
+    started = time.monotonic()
+    label = kwargs.get("provider") or ""
+    if not label:
+        try:
+            label = resolve_provider()
+        except Exception:                                   # noqa: BLE001
+            label = "none"
+    outcome = "ok"
+    reply = ""
+    try:
+        reply = _chat_unmeasured(system, user, **kwargs)
+        return reply
+    except LLMQuotaExhausted:
+        outcome = "quota"
+        raise
+    except LLMUnavailable:
+        outcome = "unavailable"
+        raise
+    except Exception:
+        outcome = "error"
+        raise
+    finally:
+        try:
+            from brahmastra import metrics
+
+            metrics.LLM_CALLS.labels(label, outcome).inc()
+            metrics.LLM_LATENCY.labels(label).observe(time.monotonic() - started)
+            metrics.LLM_CHARS.labels(label, "in").inc(len(system or "") + len(user or ""))
+            metrics.LLM_CHARS.labels(label, "out").inc(len(reply or ""))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+
+def _chat_unmeasured(
     system: str,
     user: str,
     *,

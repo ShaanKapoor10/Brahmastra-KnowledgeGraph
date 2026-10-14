@@ -13,8 +13,8 @@ RUN apt-get update \
 
 COPY common.sh backup.sh restore-test.sh restore.sh entrypoint.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/*.sh \
- && mkdir -p /backups /scratch \
- && chown postgres:postgres /backups /scratch
+ && mkdir -p /backups /scratch /ops-state \
+ && chown postgres:postgres /backups /scratch /ops-state
 
 USER postgres
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

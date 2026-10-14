@@ -16,6 +16,7 @@ step="starting"
 on_error() {
   alert "Backup FAILED at step '${step}'. Earlier backups are untouched. Check: docker compose logs backup"
   heartbeat "${BACKUP_HEARTBEAT_URL:-}" fail
+  record_state backup failed
   rm -f /backups/*.partial 2>/dev/null || true
   exit 1
 }
@@ -59,4 +60,5 @@ find /backups -maxdepth 1 -name 'brahmastra-*.dump' -mtime "+${BACKUP_KEEP_LOCAL
 
 trap - ERR
 heartbeat "${BACKUP_HEARTBEAT_URL:-}" ok
+record_state backup ok
 log "backup complete"

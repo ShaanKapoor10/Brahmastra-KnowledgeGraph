@@ -26,6 +26,15 @@
 		-Via
 	}
 
+	# Metrics name routes, workspaces and failure modes: internal only. The
+	# bundled Prometheus scrapes the backend directly on the internal network.
+	# The backend also refuses proxied requests to it; this is the first layer.
+	# (Inside `handle` blocks on purpose: a top-level `respond` runs AFTER them
+	# in Caddy's directive order and would never be reached.)
+	handle /metrics* {
+		respond 404
+	}
+
 	handle /healthz {
 		rewrite * /health/uptime
 		reverse_proxy backend:8001
@@ -34,7 +43,7 @@
 	handle_path /v1/* {
 		# /health and /health/ready describe the deployment (backends, auth
 		# mode, counts). Operators read them from inside; the internet gets /healthz.
-		@internal path /health /health/*
+		@internal path /health /health/* /metrics /metrics/*
 		respond @internal 404
 
 		# Request bodies: notes and transcripts are text. 25 MB is generous.

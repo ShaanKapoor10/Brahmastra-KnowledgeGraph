@@ -48,8 +48,10 @@ from starlette.concurrency import run_in_threadpool
 # Probes must answer before a client could hold a token, and an orchestrator's
 # health checker has no way to carry one. Login and the status check must be
 # reachable by someone who is not logged in yet.
-_OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/auth/login", "/auth/status",
-                         "/auth/setup"})
+# /metrics has no token because the scraper sits on the internal network; the
+# edge blocks it and the endpoint refuses proxied requests (main.metrics_endpoint).
+_OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/metrics", "/auth/login",
+                         "/auth/status", "/auth/setup"})
 
 # Routes that act on accounts rather than on a workspace's data.
 _WORKSPACE_FREE_PREFIXES = ("/auth/", "/workspaces")

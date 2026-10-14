@@ -525,13 +525,19 @@ def answer_question(
     the graph's resolved entities and contradictions, and the person reading it
     should know.
     """
+    import time as _time
+
     from brahmastra.graph_health import is_outage
 
+    started = _time.monotonic()
+    outcome = "graph"
     try:
         return _answer_question_graph(question, mode=mode, depth=depth)
     except Exception as exc:
         if not is_outage(exc):
+            outcome = "error"
             raise
+        outcome = "notes_fallback"
         import logging
 
         logging.getLogger(__name__).warning("graph unavailable for /ask, answering from notes: %s",
@@ -540,6 +546,13 @@ def answer_question(
         result["degraded"] = "graph_unavailable"
         result["mode"] = "notes_fallback"
         return result
+    finally:
+        try:
+            from brahmastra import metrics
+
+            metrics.ASK_LATENCY.labels(outcome).observe(_time.monotonic() - started)
+        except Exception:                                    # noqa: BLE001
+            pass
 
 
 def _answer_question_graph(

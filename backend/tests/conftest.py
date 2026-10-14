@@ -53,6 +53,7 @@ import pytest
 # (tests/_pg.py), and _guard_postgres_connections below enforces it.
 # ---------------------------------------------------------------------------
 os.environ["BRAHMASTRA_NO_DOTENV"] = "1"
+os.environ["BRAHMASTRA_LOGS"] = "off"      # keep pytest's log capture (brahmastra/logs.py)
 for _name in list(os.environ):
     if _name.startswith(("POSTGRES_", "NEO4J_", "PG")) or _name in (
             "DATABASE_URL", "NOTE_BACKEND", "GRAPH_BACKEND", "AURA_INSTANCEID"):

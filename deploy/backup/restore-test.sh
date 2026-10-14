@@ -19,6 +19,7 @@ cleanup() {
 on_error() {
   alert "Weekly RESTORE TEST FAILED at step '${step}'. Backups may not be restorable; investigate now."
   heartbeat "${RESTORE_TEST_HEARTBEAT_URL:-}" fail
+  record_state restore_test failed
   cleanup
   exit 1
 }
@@ -71,4 +72,5 @@ fi
 
 trap - ERR
 heartbeat "${RESTORE_TEST_HEARTBEAT_URL:-}" ok
+record_state restore_test ok
 log "restore test passed"

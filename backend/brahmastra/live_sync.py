@@ -281,7 +281,9 @@ def watch(interval: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    from brahmastra import preflight
+    from brahmastra import logs, preflight
+
+    logs.configure()
 
     preflight.check(check_admin=False)
     watch()

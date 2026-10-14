@@ -156,8 +156,15 @@ services:
       CORS_ORIGINS: ""
       MCP_HTTP: ${MCP_HTTP:-}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # Each uvicorn worker writes its metric files here (on the tmpfs, emptied
+      # at start); /metrics merges them (brahmastra/metrics.py).
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      BRAHMASTRA_OPS_STATE: /ops-state
+      LOG_FORMAT: json
     volumes:
       - brahmastra-data:/data
+      # The backup job's outcomes, read-only, so backup age is a metric.
+      - ops-state:/ops-state:ro
     tmpfs: ["/tmp:size=256m"]
     # edge for OUTBOUND only (LLM providers, Notion); it publishes nothing.
     networks: [edge, internal]
@@ -243,6 +250,7 @@ services:
     volumes:
       - backups:/backups
       - backup-scratch:/scratch
+      - ops-state:/ops-state
     tmpfs: ["/tmp:size=64m"]
     # internal to reach Postgres; edge for the off-host copy (S3).
     networks: [edge, internal]
@@ -288,3 +296,4 @@ volumes:
   caddy-config:
   backups:
   backup-scratch:
+  ops-state:
