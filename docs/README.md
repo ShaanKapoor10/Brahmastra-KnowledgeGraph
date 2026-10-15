@@ -28,13 +28,3 @@ in a light and a dark variant. Edit the script and re-run it; do not edit the SV
 ```sh
 python docs/assets/readme/build.py
 ```
-
-## Earlier versions
-
-The following documents describe the first prototype of Brahmastra and are kept for
-reference only. The guides above supersede them.
-
-`START_HERE.md` · `DOCUMENTATION_INDEX.md` · `QUICK_START.md` · `DETAILED_ARCHITECTURE.md` ·
-`AGENT_MEMORY_PERSISTENCE.md` · `AI_AGENTS_INTEGRATION.md` · `USER_INTEGRATION_GUIDE.md` ·
-`CLAUDE_CODE_INTEGRATION.md` · `CLAUDE_CODE_HANDOFF.md` · `CLAUDE_CODE_PACKAGE_INDEX.md` ·
-`CLAUDE_CODE_QUICK_REFERENCE.md` · `CLAUDE_CODE_WORKFLOW_EXAMPLES.md` · `STATUS.md` · `SYSTEM_MAP.html`

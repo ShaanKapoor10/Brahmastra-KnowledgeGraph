@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "brahmastra": {
-      "command": "C:\\Users\\shaan\\Desktop\\ai\\vaultgraph-qy\\backend\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "brahmastra.mcp_server"],
-      "cwd": "C:\\Users\\shaan\\Desktop\\ai\\vaultgraph-qy\\backend"
-    }
-  }
-}
