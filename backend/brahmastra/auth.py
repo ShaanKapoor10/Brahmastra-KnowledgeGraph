@@ -119,11 +119,12 @@ def required_role(method: str, path: str) -> str | None:
     if path.startswith(_ADMIN_PREFIXES):
         return "admin"
     if path == "/mcp" or path.startswith("/mcp/"):
-        # Remote MCP tools run in the MCP server's own task group, so the caller's
-        # identity and workspace membership are not proven to reach them, and one
-        # tool searches every workspace. Until that is scoped per user, only callers
-        # who may see every workspace get in.
-        return "admin"
+        # Any signed-in caller may connect. Each TOOL then re-identifies the
+        # caller from the HTTP request and checks its own role and the caller's
+        # workspace membership (mcp_server._scoped), because tools run in the MCP
+        # session manager's task group, where this middleware's bindings are not
+        # guaranteed to reach.
+        return "viewer"
     if path.startswith(_SELF_SERVICE_PREFIXES):
         return None
     if path == "/workspaces" and method == "POST" or (
@@ -139,8 +140,12 @@ def _deny(code: int, detail: str) -> JSONResponse:
     return JSONResponse(status_code=code, content={"detail": detail}, headers=headers)
 
 
-def _resolve(request: Request):
-    """(identity, error response). Runs in a thread: it may touch the database."""
+def resolve_identity(request) -> tuple:
+    """(identity, None) or (None, (status, detail)). May touch the database.
+
+    Shared by the middleware and by the remote MCP tools (mcp_server._scoped),
+    so there is exactly one answer to "who is this" for both.
+    """
     from brahmastra.accounts import ANONYMOUS, SERVICE, store
 
     presented = _presented_key(request)
@@ -153,16 +158,25 @@ def _resolve(request: Request):
         identity = store().identify(presented)
         if identity:
             return identity, None
-        return None, _deny(401, "Invalid, expired or revoked credentials.")
+        return None, (401, "Invalid, expired or revoked credentials.")
     if key or users_exist():
-        return None, _deny(401, "Sign in, or send a token as 'Authorization: Bearer <token>'.")
+        return None, (401, "Sign in, or send a token as 'Authorization: Bearer <token>'.")
     if _anonymous_allowed():
         return ANONYMOUS, None
-    return None, _deny(503, (
+    return None, (503, _UNCONFIGURED)
+
+
+def _resolve(request: Request):
+    """(identity, error response). Runs in a thread: it may touch the database."""
+    identity, problem = resolve_identity(request)
+    return identity, (None if problem is None else _deny(*problem))
+
+
+_UNCONFIGURED = (
         "API authentication is not configured. Create an admin with "
         "`python -m brahmastra.accounts create-admin --email you@example.com`, set "
         "BRAHMASTRA_API_KEY to require a shared bearer token, or set "
-        "BRAHMASTRA_ALLOW_ANONYMOUS=1 to run without authentication (local development only)."))
+        "BRAHMASTRA_ALLOW_ANONYMOUS=1 to run without authentication (local development only).")
 
 
 async def require_api_key(request: Request, call_next):

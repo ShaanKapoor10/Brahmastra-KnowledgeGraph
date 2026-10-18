@@ -124,25 +124,36 @@ export function DiagnosticsPanel({ workspace, backendAvailable }: { workspace: s
   const [busy, setBusy] = useState<string | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`/api${scoped("/diagnostics", workspace)}`, { cache: "no-store" })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body?.detail ?? res.statusText)
-      setData(body)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }, [workspace])
+  // Another workspace's findings must never be on screen for this one: reset
+  // during render, before anything is painted (an effect would paint first).
+  const [shownFor, setShownFor] = useState(workspace)
+  if (shownFor !== workspace) {
+    setShownFor(workspace)
+    setData(null)
+  }
+
+  // Bumped after an action; the effect below refreshes on it, and every 15 s.
+  const [version, setVersion] = useState(0)
+  const load = useCallback(() => setVersion((v) => v + 1), [])
 
   useEffect(() => {
-    setData(null)
     if (!backendAvailable) return
-    load()
-    const t = setInterval(load, 15000)
-    return () => clearInterval(t)
-  }, [backendAvailable, load])
+    let live = true            // a reply for an earlier workspace is dropped
+    const fetchOnce = () =>
+      fetch(`/api${scoped("/diagnostics", workspace)}`, { cache: "no-store" })
+        .then(async (res) => {
+          const body = await res.json()
+          if (!res.ok) throw new Error(body?.detail ?? res.statusText)
+          return body as Diagnostics
+        })
+        .then(
+          (body) => { if (live) { setData(body); setError(null) } },
+          (e) => { if (live) setError((e as Error).message) },
+        )
+    void fetchOnce()
+    const t = setInterval(fetchOnce, 15000)
+    return () => { live = false; clearInterval(t) }
+  }, [backendAvailable, workspace, version])
 
   /** Run one safe action, say what happened, refresh. */
   const act = async (key: string, path: string, done: (body: Record<string, unknown>) => string) => {
@@ -152,7 +163,7 @@ export function DiagnosticsPanel({ workspace, backendAvailable }: { workspace: s
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body?.detail ?? res.statusText)
       setFlash(done(body))
-      await load()
+      load()
     } catch (e) {
       setFlash(`Failed: ${(e as Error).message}`)
     } finally {
@@ -552,26 +563,24 @@ function GroqKeys() {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null)
 
-  const load = useCallback(async () => {
-    try {
-      const out = await keysApi<{ admin: boolean; keys: KeyRow[] }>("")
-      setRows(out.keys)
-      setAdmin(out.admin)
-    } catch (e) {
-      setMessage({ tone: "error", text: (e as Error).message })
-    }
-  }, [])
+  const [version, setVersion] = useState(0)
+  const load = () => setVersion((v) => v + 1)
 
   useEffect(() => {
-    load()
-  }, [load])
+    let live = true
+    keysApi<{ admin: boolean; keys: KeyRow[] }>("").then(
+      (out) => { if (live) { setRows(out.keys); setAdmin(out.admin) } },
+      (e) => { if (live) setMessage({ tone: "error", text: (e as Error).message }) },
+    )
+    return () => { live = false }
+  }, [version])
 
   const act = async (id: string, fn: () => Promise<string>) => {
     setBusy(id)
     setMessage(null)
     try {
       setMessage({ tone: "ok", text: await fn() })
-      await load()
+      load()
     } catch (e) {
       setMessage({ tone: "error", text: (e as Error).message })
     } finally {

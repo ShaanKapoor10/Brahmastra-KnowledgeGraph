@@ -201,7 +201,6 @@ export function MeetingsPanel({
   const [rows, setRows] = useState<TranscriptRow[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [meeting, setMeeting] = useState<Meeting | null>(null)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busyItem, setBusyItem] = useState<string | null>(null)
   const [showRejected, setShowRejected] = useState(false)
@@ -215,41 +214,49 @@ export function MeetingsPanel({
       .catch(() => {})
   }, [backendAvailable])
 
-  const loadList = useCallback(async () => {
-    try {
-      const list = await api<TranscriptRow[]>(scoped("/ingest/transcripts", workspace))
-      setRows(list)
-      setSelected((cur) => cur ?? list[0]?.id ?? null)
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }, [workspace])
-
-  const loadMeeting = useCallback(
-    async (id: string) => {
-      setLoading(true)
-      try {
-        setMeeting(await api<Meeting>(scoped(`/ingest/transcripts/${id}/meeting`, workspace)))
-        setError(null)
-      } catch (e) {
-        setError((e as Error).message)
-      } finally {
-        setLoading(false)
-      }
-    },
-    [workspace],
-  )
-
-  useEffect(() => {
+  // A meeting from another workspace must never stay on screen: reset during
+  // render, before anything is painted (an effect would paint it first).
+  const [shownFor, setShownFor] = useState(workspace)
+  if (shownFor !== workspace) {
+    setShownFor(workspace)
     setSelected(null)
     setMeeting(null)
-    if (backendAvailable) loadList()
-  }, [workspace, backendAvailable, loadList])
+  }
+
+  // Bumped to reload; each effect below fetches when its counter moves, and
+  // drops a reply that arrives after the workspace or selection changed.
+  const [listVersion, setListVersion] = useState(0)
+  const [meetingVersion, setMeetingVersion] = useState(0)
+  const loadList = useCallback(() => setListVersion((v) => v + 1), [])
+  const loadMeeting = useCallback(() => setMeetingVersion((v) => v + 1), [])
 
   useEffect(() => {
-    if (selected) loadMeeting(selected)
-  }, [selected, loadMeeting])
+    if (!backendAvailable) return
+    let live = true
+    api<TranscriptRow[]>(scoped("/ingest/transcripts", workspace)).then(
+      (list) => {
+        if (!live) return
+        setRows(list)
+        setSelected((cur) => cur ?? list[0]?.id ?? null)
+        setError(null)
+      },
+      (e) => { if (live) setError((e as Error).message) },
+    )
+    return () => { live = false }
+  }, [workspace, backendAvailable, listVersion])
+
+  useEffect(() => {
+    if (!selected) return
+    let live = true
+    api<Meeting>(scoped(`/ingest/transcripts/${selected}/meeting`, workspace)).then(
+      (m) => { if (live) { setMeeting(m); setError(null) } },
+      (e) => { if (live) setError((e as Error).message) },
+    )
+    return () => { live = false }
+  }, [selected, workspace, meetingVersion])
+
+  // Selected but not yet arrived: show a spinner rather than an empty page.
+  const loading = selected !== null && meeting === null && error === null
 
   // While anything is being processed, keep the list (and the open meeting) live.
   const inFlight = rows.some((r) => running(r.status))
@@ -257,10 +264,10 @@ export function MeetingsPanel({
     if (!inFlight) return
     const t = setInterval(() => {
       loadList()
-      if (selected) loadMeeting(selected)
+      loadMeeting()
     }, 4000)
     return () => clearInterval(t)
-  }, [inFlight, selected, loadList, loadMeeting])
+  }, [inFlight, loadList, loadMeeting])
 
   const toggleReject = async (item: Item) => {
     setBusyItem(item.id)
@@ -270,7 +277,7 @@ export function MeetingsPanel({
         headers: { "Content-Type": "application/json" },
         body: item.rejected ? undefined : JSON.stringify({}),
       })
-      if (selected) await loadMeeting(selected)
+      loadMeeting()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -282,8 +289,9 @@ export function MeetingsPanel({
     try {
       const q = mode ? `?mode=${encodeURIComponent(mode)}` : ""
       await api(scoped(`/ingest/transcripts/${id}/reprocess${q}`, workspace), { method: "POST" })
-      await loadList()
-      await loadMeeting(id)
+      loadList()
+      if (id === selected) loadMeeting()
+      else setSelected(id)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -435,8 +443,13 @@ function MeetingView({
       })),
     [kinds, current, showRejected],
   )
+  // Follows the meeting's mode when it changes (adjusted during render).
   const [readAs, setReadAs] = useState(mode.id)
-  useEffect(() => setReadAs(mode.id), [mode.id])
+  const [readAsFor, setReadAsFor] = useState(mode.id)
+  if (readAsFor !== mode.id) {
+    setReadAsFor(mode.id)
+    setReadAs(mode.id)
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -572,10 +585,13 @@ function SaidSearch({ transcriptId, workspace }: { transcriptId: string; workspa
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  useEffect(() => {
+  // A search belongs to one session: clear it when another opens.
+  const [searchedIn, setSearchedIn] = useState(transcriptId)
+  if (searchedIn !== transcriptId) {
+    setSearchedIn(transcriptId)
     setQ("")
     setHits(null)
-  }, [transcriptId])
+  }
 
   const run = async () => {
     if (!q.trim()) return
@@ -849,7 +865,11 @@ function AddMeeting({
   // Asked every time, defaulting to the graph on screen: a meeting filed in
   // the wrong workspace is invisible from the right one.
   const [target, setTarget] = useState(workspace)
-  useEffect(() => setTarget(workspace), [workspace])
+  const [targetFor, setTargetFor] = useState(workspace)
+  if (targetFor !== workspace) {
+    setTargetFor(workspace)
+    setTarget(workspace)
+  }
   const choices = workspaces.some((w) => w.id === workspace) ? workspaces : [{ id: workspace }, ...workspaces]
   const [title, setTitle] = useState("")
   const [date, setDate] = useState("")

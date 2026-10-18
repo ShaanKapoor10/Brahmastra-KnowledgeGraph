@@ -43,8 +43,6 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
   const [size, setSize] = useState({ w: 800, h: 560 })
   const [, force] = useState(0) // re-render trigger
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null)
-  const nodesRef = useRef<SimNode[]>([])
-  const linksRef = useRef<SimLink[]>([])
   const draggingRef = useRef<string | null>(null)
 
   // viewport transform (pan + zoom)
@@ -56,6 +54,8 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
   // background-pan state
   const panRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const movedRef = useRef(false)
+  // For the cursor: render reads state, never a ref (a ref's change does not re-render).
+  const [panning, setPanning] = useState(false)
 
   // cluster lookup + centrality lookup
   const clusterOf = useMemo(() => {
@@ -86,8 +86,10 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
     return () => ro.disconnect()
   }, [])
 
-  // Build + run simulation when the graph data changes
-  useEffect(() => {
+  // The layout's nodes and links, built from the graph. d3 moves them in
+  // place on every tick and the tick counter re-renders; render reads them
+  // from here rather than from a ref, so React sees where they come from.
+  const { nodes, links } = useMemo(() => {
     const nodes: SimNode[] = graph.nodes.map((n) => {
       const s = scoreOf.m.get(n.id) ?? 0
       return {
@@ -110,9 +112,11 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
         relation: e.relation,
       })
     }
-    nodesRef.current = nodes
-    linksRef.current = links
+    return { nodes, links }
+  }, [graph, clusterOf, scoreOf])
 
+  // Run the simulation over them whenever they change.
+  useEffect(() => {
     const sim = forceSimulation<SimNode>(nodes)
       .force(
         "link",
@@ -131,8 +135,10 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
     return () => {
       sim.stop()
     }
+    // Size is applied by the effect below; restarting the whole layout on a
+    // resize would throw away where people dragged things.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, clusterOf, scoreOf])
+  }, [nodes, links])
 
   // keep center updated on resize
   useEffect(() => {
@@ -141,9 +147,6 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
     sim.force("center", forceCenter(size.w / 2, size.h / 2))
     sim.alpha(0.3).restart()
   }, [size])
-
-  const nodes = nodesRef.current
-  const links = linksRef.current
 
   // neighbors of selected for highlight
   const neighborSet = useMemo(() => {
@@ -197,6 +200,7 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
   const onBgPointerDown = (e: React.PointerEvent) => {
     panRef.current = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y }
     movedRef.current = false
+    setPanning(true)
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   }
 
@@ -235,6 +239,7 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
     if (panRef.current) {
       const wasClick = !movedRef.current
       panRef.current = null
+      setPanning(false)
       if (wasClick) onSelect(null) // click on empty space deselects
     }
   }
@@ -256,7 +261,7 @@ export function GraphView({ graph, clusters, central, selected, onSelect }: Grap
         ref={svgRef}
         width={size.w}
         height={size.h}
-        className={`block touch-none ${panRef.current ? "cursor-grabbing" : "cursor-grab"}`}
+        className={`block touch-none ${panning ? "cursor-grabbing" : "cursor-grab"}`}
         onPointerDown={onBgPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

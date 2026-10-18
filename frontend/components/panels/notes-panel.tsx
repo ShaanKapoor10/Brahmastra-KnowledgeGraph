@@ -34,24 +34,17 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
   const triplesByNote = (id: string) => triples.filter((t) => t.sourceNoteId === id)
 
   const [query, setQuery] = useState("")
-  const [hits, setHits] = useState<Note[] | null>(null)
+  // What the backend last returned, and for which query: results for an older
+  // query are never shown under a newer one.
+  const [remote, setRemote] = useState<{ q: string; hits: Note[] } | null>(null)
   const [searching, setSearching] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
+  const [failed, setFailed] = useState<{ q: string; message: string } | null>(null)
 
   // The backend's HYBRID search (BM25 + vectors), so a note sharing no words
   // with the query still turns up. Offline, a plain substring filter.
+  const q = query.trim()
   useEffect(() => {
-    const q = query.trim()
-    if (!q) {
-      setHits(null)
-      setSearchError(null)
-      return
-    }
-    if (!backendAvailable) {
-      const needle = q.toLowerCase()
-      setHits(notes.filter((n) => `${n.title} ${n.content}`.toLowerCase().includes(needle)))
-      return
-    }
+    if (!q || !backendAvailable) return
     const ctrl = new AbortController()
     const t = setTimeout(async () => {
       setSearching(true)
@@ -63,7 +56,7 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
         })
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
         const body: Hit[] = await res.json()
-        setHits(
+        setRemote({ q, hits:
           body.map((h) => ({
             id: h.id,
             title: h.title,
@@ -71,10 +64,10 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
             lastEdited: h.last_edited ?? "",
             extractionStatus: (h.extraction_status ?? "done") as Note["extractionStatus"],
           })),
-        )
-        setSearchError(null)
+        })
+        setFailed(null)
       } catch (e) {
-        if ((e as Error).name !== "AbortError") setSearchError((e as Error).message)
+        if ((e as Error).name !== "AbortError") setFailed({ q, message: (e as Error).message })
       } finally {
         setSearching(false)
       }
@@ -83,7 +76,17 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
       clearTimeout(t)
       ctrl.abort()
     }
-  }, [query, backendAvailable, workspace, notes])
+  }, [q, backendAvailable, workspace])
+
+  // Derived during render: nothing to search, the offline filter, or the
+  // backend's answer for exactly this query.
+  const offlineHits = useMemo(() => {
+    if (!q || backendAvailable) return null
+    const needle = q.toLowerCase()
+    return notes.filter((n) => `${n.title} ${n.content}`.toLowerCase().includes(needle))
+  }, [q, backendAvailable, notes])
+  const hits: Note[] | null = !q ? null : backendAvailable ? (remote?.q === q ? remote.hits : null) : offlineHits
+  const searchError = q && failed?.q === q ? failed.message : null
 
   const newestFirst = useMemo(
     () => [...notes].sort((a, b) => (b.lastEdited || "").localeCompare(a.lastEdited || "")),

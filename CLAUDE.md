@@ -130,7 +130,12 @@ failure each defence came from, and where to take this next.
 - **Metrics** (`metrics.py`) are internal; Caddy blocks `/metrics`, tested by
   `deploy/tests/edge-test.sh`.
 - **Startup refuses unsafe production config** (`preflight.py`, exit 78).
-- **Accounts and roles:** `accounts.py`, `auth.py`; remote MCP is admin-only.
+- **Accounts and roles:** `accounts.py`, `auth.py`; dashboard **Team** (admins) and
+  **Account** tabs. Remote MCP is open to every role: each tool re-identifies the
+  caller from its own HTTP request and checks role + workspace (`mcp_server._scoped`),
+  because the middleware's contextvars are not guaranteed to reach MCP tools. The SDK's
+  Host check is configured from PUBLIC_URL/DOMAIN (`MCP_ALLOWED_HOSTS` adds more).
+  Rate limits that cost money are shared across workers (`rate_windows` table).
 - **CI and releases** (`.github/`, CONTRIBUTING.md): the only required check is
   `ci-success`. Python installs come from `backend/uv.lock` (`uv sync --frozen`,
   hash-checked; torch only from the CPU index). A `v*` tag on main makes signed
