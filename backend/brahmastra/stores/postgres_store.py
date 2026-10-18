@@ -358,6 +358,10 @@ class PostgresStore(GraphStore):
         source: str | None = None,
     ) -> None:
         status = "pending" if mark_pending else "done"
+        # One clock reading: a new note is created and last updated at the same
+        # instant. Two reads differed by microseconds on Linux, so "stamped once"
+        # held only on clocks too coarse to tell them apart (Windows).
+        stamp = _now()
         with self._connect().cursor() as cur:
             cur.execute(
                 """
@@ -396,8 +400,8 @@ class PostgresStore(GraphStore):
                         ELSE notes.extraction_status
                     END
                 """,
-                (id, self.workspace, title, content, last_edited, _now(), status,
-                 bool(publish), source or "unknown", _now(), _now(),
+                (id, self.workspace, title, content, last_edited, stamp, status,
+                 bool(publish), source or "unknown", stamp, stamp,
                  None if publish is None else bool(publish),
                  source),
             )

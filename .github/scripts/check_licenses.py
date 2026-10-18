@@ -41,6 +41,7 @@ OUR_OWN = {"brahmastra-backend", "brahmastra", "frontend"}
 ALIASES = {
     "mit license": "MIT", "mit": "MIT",
     "bsd": "BSD-3-Clause", "bsd license": "BSD-3-Clause", "new bsd license": "BSD-3-Clause",
+    "3-clause bsd license": "BSD-3-Clause", "bsd 3-clause license": "BSD-3-Clause",
     "apache software license": "Apache-2.0", "apache license, version 2.0": "Apache-2.0",
     "apache 2.0": "Apache-2.0", "apache 2.0 license": "Apache-2.0", "apache license 2.0": "Apache-2.0",
     "isc license": "ISC", "isc license (iscl)": "ISC",
