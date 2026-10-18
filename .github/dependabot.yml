@@ -31,6 +31,14 @@ updates:
     directories: [/backend, /frontend, /deploy/backup]
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: UTC }
     cooldown: { default-days: 7 }
+    # Digests are refreshed; the RUNTIME is chosen deliberately, never by a bot.
+    # Its first run proposed Node 25 (not LTS, and without corepack, so the
+    # build broke) and Python 3.14 (uv.lock is resolved for 3.12).
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
     groups:
       base-images:
         patterns: ["*"]
