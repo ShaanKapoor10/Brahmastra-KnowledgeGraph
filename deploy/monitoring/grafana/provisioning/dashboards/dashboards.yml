@@ -1,0 +1,11 @@
+# Dashboards are files in git (deploy/monitoring/grafana/dashboards). Edits made
+# in the UI are not kept: change the JSON and commit it, like any other config.
+apiVersion: 1
+providers:
+  - name: brahmastra
+    folder: Brahmastra
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

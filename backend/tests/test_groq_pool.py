@@ -163,7 +163,9 @@ def test_when_every_key_is_briefly_limited_the_pool_waits_as_told(slept):
     pool = _pool(script, "a", "b")
 
     assert pool.call(lambda c: c.create()).startswith("ok")
-    assert slept == [pytest.approx(7.6)]
+    # 7.6 s minus the microseconds since the limit was recorded: the wait is
+    # measured on the monotonic clock, so exactly 7.6 holds only on a slow one.
+    assert slept == [pytest.approx(7.6, abs=0.01)]
 
 
 def test_the_watcher_gives_up_after_two_waits_without_calling_it_quota(slept):

@@ -27,7 +27,7 @@ NAMES_B = ["sarah Chen", "SQLite db", "Groq keys", "entity_resolution",
 class FakeModel:
     """Deterministic, word-based vectors: names sharing words land close."""
 
-    def encode(self, texts, normalize_embeddings=True):
+    def encode(self, texts, normalize_embeddings=True, **kwargs):
         out = []
         for t in texts:
             v = np.zeros(32, dtype="float32")

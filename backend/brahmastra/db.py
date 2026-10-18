@@ -15,7 +15,6 @@ and GRAPH_BACKEND stay changeable at runtime (which tests rely on).
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from brahmastra.stores import backend_name, get_store, reset_store

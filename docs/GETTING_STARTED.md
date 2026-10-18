@@ -17,7 +17,7 @@ is enough to try Brahmastra.
 ## 1. Run the stack
 
 ```sh
-git clone https://github.com/ShaanKapoor10/vaultgraph-qy.git
+git clone https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph.git
 cd vaultgraph-qy
 
 cat > .env <<'EOF'

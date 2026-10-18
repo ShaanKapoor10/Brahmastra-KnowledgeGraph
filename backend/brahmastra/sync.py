@@ -342,7 +342,9 @@ def run_sync() -> dict[str, Any]:
     # setups working with no configuration change.
     target_id = _notion_target_for_current_workspace()
 
-    client = Client(auth=token)
+    # Explicit, rather than the library's 60 s default: a Notion outage must
+    # not hold a pipeline stage for a minute per call (docs/RELIABILITY.md).
+    client = Client(auth=token, timeout_ms=int(os.environ.get("NOTION_TIMEOUT_MS", "30000")))
     db.init_db()
 
     existing = {n["id"]: n for n in db.get_notes()}

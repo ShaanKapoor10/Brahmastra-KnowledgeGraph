@@ -517,6 +517,48 @@ def answer_question(
     question: str, mode: str = "auto", depth: int | None = None
 ) -> dict[str, Any]:
     """
+    Answer from the graph; if the graph engine is DOWN, answer from the notes.
+
+    Notes and transcript passages live in Postgres, so /ask keeps working
+    through a Neo4j outage. Such an answer says so -- `degraded` is set and
+    `source` is "notes" or "transcript" -- because it was not checked against
+    the graph's resolved entities and contradictions, and the person reading it
+    should know.
+    """
+    import time as _time
+
+    from brahmastra.graph_health import is_outage
+
+    started = _time.monotonic()
+    outcome = "graph"
+    try:
+        return _answer_question_graph(question, mode=mode, depth=depth)
+    except Exception as exc:
+        if not is_outage(exc):
+            outcome = "error"
+            raise
+        outcome = "notes_fallback"
+        import logging
+
+        logging.getLogger(__name__).warning("graph unavailable for /ask, answering from notes: %s",
+                                            type(exc).__name__)
+        result = _answer_from_passages(question, [])
+        result["degraded"] = "graph_unavailable"
+        result["mode"] = "notes_fallback"
+        return result
+    finally:
+        try:
+            from brahmastra import metrics
+
+            metrics.ASK_LATENCY.labels(outcome).observe(_time.monotonic() - started)
+        except Exception:                                    # noqa: BLE001
+            pass
+
+
+def _answer_question_graph(
+    question: str, mode: str = "auto", depth: int | None = None
+) -> dict[str, Any]:
+    """
     Answer a natural-language question against the graph.
 
     mode:  "auto" (route by heuristic), "local", or "global".

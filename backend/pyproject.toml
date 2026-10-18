@@ -2,6 +2,7 @@
 name = "brahmastra-backend"
 version = "0.1.0"
 description = "Brahmastra Concept Graph Engine — Python backend"
+license = { text = "Elastic-2.0" }
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.115.0",
@@ -35,6 +36,8 @@ dependencies = [
     # to be present in the local venv, so nothing failed here, but a clean
     # install would import-error the moment the Neo4j backend was selected.
     "neo4j>=5.20.0",
+    # Prometheus metrics at /metrics (brahmastra/metrics.py). Apache-2.0.
+    "prometheus-client>=0.21,<1",
     # Not transitive-by-accident: neo4j_store passes an explicit certifi SSL
     # context, because a TLS-intercepting root CA makes the driver's default
     # verification fail with "self-signed certificate in certificate chain".
@@ -61,3 +64,58 @@ include = ["brahmastra*"]
 
 [tool.uv]
 managed = true
+
+# The CPU-only PyTorch index serves torch and NOTHING else. Letting a second
+# index answer for any package is the dependency-confusion pattern; pinning it
+# to torch means every other package comes only from PyPI. uv.lock carries a
+# SHA-256 hash for every file, and every install is `uv sync --frozen`.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+# Lint gate for CI (CONTRIBUTING.md). Ruff's own defaults -- errors and
+# real bugs, not style -- so the gate is strict where it matters and every
+# existing line already passes. A project config also overrides any personal
+# ruff config a developer has, so CI and laptops agree.
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# E402 (import not at top of file) is deliberate here: environment variables
+# must be set BEFORE certain imports, because `brahmastra.stores` reads .env at
+# import time (CLAUDE.md, "A throwaway python -c hits PRODUCTION").
+ignore = ["E402"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures imported for pytest's injection look unused, and their parameters
+# shadow them by design.
+"tests/*" = ["F401", "F811", "E702"]   # E702: one-line test tables
+
+# Type-checking gate: the security- and operations-critical modules (accounts,
+# auth, startup checks, logs, metrics, degradation, rebuild). Widened module by
+# module; never narrowed.
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "silent"
+files = [
+  "brahmastra/accounts.py", "brahmastra/auth.py", "brahmastra/preflight.py",
+  "brahmastra/logs.py", "brahmastra/metrics.py", "brahmastra/graph_health.py",
+  "brahmastra/graph_snapshot.py", "brahmastra/rebuild.py", "brahmastra/ingest/records.py",
+  "brahmastra/ratelimit.py",
+]
+
+# CI and development tools only; never installed in the image.
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.13,<1",
+  "mypy>=1.15,<2",
+  "pip-audit>=2.9,<3",
+]

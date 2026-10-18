@@ -29,10 +29,20 @@ interface AskResult {
    * Absent on global (cluster summary) answers.
    */
   source?: "graph" | "notes" | "transcript" | "none"
+  /** Set when the graph engine was down and the answer came from the notes instead. */
+  degraded?: "graph_unavailable"
   passages?: Passage[]
 }
 
 const SOURCE: Record<string, { label: string; title: string; cls: string; Icon: typeof Network }> = {
+  degraded: {
+    label: "graph unavailable, answered from your notes",
+    title:
+      "The knowledge graph could not be reached, so this was answered from your notes and transcripts. " +
+      "It was not checked against the graph's resolved names or contradictions.",
+    cls: "border-orange-500/40 bg-orange-500/10 text-orange-300",
+    Icon: MessageSquareQuote,
+  },
   graph: {
     label: "from the graph",
     title: "Answered from facts and statements in the knowledge graph.",
@@ -93,16 +103,18 @@ export function AskPanel({ backendAvailable = false }: { backendAvailable?: bool
         body: JSON.stringify({ question: query, mode: "auto" }),
       })
       const raw = await res.text()
-      let data: any = null
+      let data: Record<string, unknown> | null = null
       try {
         data = raw ? JSON.parse(raw) : null
       } catch {
         data = null
       }
       if (!res.ok) {
-        setError(data?.detail ?? raw?.slice(0, 160) ?? res.statusText)
+        const detail = typeof data?.detail === "string" ? data.detail : null
+        setError(detail ?? raw?.slice(0, 160) ?? res.statusText)
       } else {
-        setResult(data as AskResult)
+        // The API's response shape for /ask (routers/ask.py).
+        setResult(data as unknown as AskResult)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -188,8 +200,8 @@ export function AskPanel({ backendAvailable = false }: { backendAvailable?: bool
             >
               {result.mode} search
             </span>
-            {result.source && SOURCE[result.source] && (() => {
-              const s = SOURCE[result.source!]
+            {(result.degraded || (result.source && SOURCE[result.source])) && (() => {
+              const s = SOURCE[result.degraded ? "degraded" : result.source!]
               return (
                 <span
                   title={s.title}

@@ -1,0 +1,33 @@
+# Secret scanning (gitleaks), run on every pull request, every push to main and
+# nightly over the FULL history (.github/workflows/security.yml).
+#
+# The default rules, plus the key formats this project actually handles. Test
+# fixtures use visibly fake keys ("FAKE", "x" * 30); the allowlist matches the
+# fake shape, never a file path, so a real key pasted into a test still fails.
+title = "brahmastra"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "groq-api-key"
+description = "Groq API key"
+regex = '''\bgsk_[A-Za-z0-9]{40,}\b'''
+keywords = ["gsk_"]
+
+[[rules]]
+id = "notion-integration-token"
+description = "Notion integration token"
+regex = '''\b(?:ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{40,})\b'''
+keywords = ["ntn_", "secret_"]
+
+[[rules]]
+id = "brahmastra-token"
+description = "Brahmastra API or session token"
+regex = '''\b(?:bra|bss)_[A-Za-z0-9_-]{32,}\b'''
+keywords = ["bra_", "bss_"]
+
+[allowlist]
+description = "visibly fake test keys"
+regexTarget = "match"
+regexes = ['''FAKE''', '''(?i)x{20,}''', '''(?i)example''']

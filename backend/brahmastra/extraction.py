@@ -18,8 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
-from pathlib import Path
+import time  # noqa: F401  (tests patch extraction.time.sleep; the retry loop sleeps through it)
 from typing import Any
 
 # Load backend/.env on import so LLM_PROVIDER / keys are set no matter which

@@ -162,7 +162,7 @@ import numpy as np
 class _FakeEmbedder:
     """Deterministic vectors, so the comparison is exact and needs no model."""
 
-    def encode(self, texts, normalize_embeddings=True):
+    def encode(self, texts, normalize_embeddings=True, **kwargs):
         rng = np.random.default_rng(7)
         v = rng.normal(size=(len(texts), 16)).astype(np.float32)
         return v / np.linalg.norm(v, axis=1, keepdims=True)
@@ -236,7 +236,7 @@ def test_a_failure_mid_computation_says_why(monkeypatch):
     import brahmastra.entity_resolution as er
 
     class Broken:
-        def encode(self, texts, normalize_embeddings=True):
+        def encode(self, texts, normalize_embeddings=True, **kwargs):
             raise MemoryError("Unable to allocate 10.4 GiB")
 
     monkeypatch.setattr(er, "_get_embedder", lambda: Broken())

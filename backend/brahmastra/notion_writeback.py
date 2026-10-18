@@ -20,7 +20,6 @@ Usage:  from brahmastra.notion_writeback import push_insights
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 # Ensure NOTION_TOKEN is available regardless of entrypoint
@@ -215,7 +214,9 @@ def push_insights() -> dict[str, Any]:
     except ImportError as e:
         raise RuntimeError("notion-client not installed") from e
 
-    client = Client(auth=token)
+    # Explicit, rather than the library's 60 s default: a Notion outage must
+    # not hold a pipeline stage for a minute per call (docs/RELIABILITY.md).
+    client = Client(auth=token, timeout_ms=int(os.environ.get("NOTION_TIMEOUT_MS", "30000")))
 
     # Publish first, so a note created in this run also gets its insights in
     # the same run rather than waiting for the next one.
@@ -291,13 +292,13 @@ def push_insights() -> dict[str, Any]:
         children: list[dict[str, Any]] = []
         if rel_lines:
             children.append(_heading("Relationships found:"))
-            children.extend(_bullet(l) for l in rel_lines)
+            children.extend(_bullet(line) for line in rel_lines)
         if contra_lines:
             children.append(_heading("⚠️ Contradictions:"))
-            children.extend(_bullet(l) for l in contra_lines)
+            children.extend(_bullet(line) for line in contra_lines)
         if pred_lines:
             children.append(_heading("🔗 Suggested connections:"))
-            children.extend(_bullet(l) for l in pred_lines[:5])
+            children.extend(_bullet(line) for line in pred_lines[:5])
 
         if not children:
             skipped += 1

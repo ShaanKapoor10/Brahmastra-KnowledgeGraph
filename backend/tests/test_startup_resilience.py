@@ -65,13 +65,18 @@ def test_liveness_stays_ok_so_the_container_is_not_killed(unreachable):
 
 
 def test_readiness_reports_503_and_says_why(unreachable):
+    """
+    Here the ONE store holds the notes too (single-store SQLite), so nothing can
+    be served: 503. When only a separate graph engine is down, readiness is
+    "degraded" instead -- see tests/test_health.py.
+    """
     main, _ = unreachable
     with TestClient(main.app) as client:
         resp = client.get("/health/ready")
         assert resp.status_code == 503
         body = resp.json()
         assert body["status"] == "unavailable"
-        assert "DNS resolve" in body["error"]
+        assert "DNS resolve" in body["components"]["graph"]
 
 
 def test_it_recovers_without_a_restart(unreachable):

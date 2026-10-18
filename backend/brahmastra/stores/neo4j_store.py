@@ -37,8 +37,8 @@ import os
 import re
 import ssl
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from brahmastra.stores.base import GraphStore
 from brahmastra.workspace import (
@@ -268,14 +268,21 @@ class Neo4jStore(GraphStore):
             # slow on the first connection after a resume, and a timeout that
             # fires during a normal wake-up would turn a working instance into
             # an unreachable one.
+            #
+            # A LOCAL engine (the production compose stack) gets short waits:
+            # it never needs to wake up, so a slow answer means it is down, and
+            # the circuit breaker (graph_health.py) plus the snapshot fallback
+            # turn that into a degraded dashboard instead of hung requests.
+            host = (urlparse(self._uri or "").hostname or "").lower()
+            remote = self._encrypted() or host == "neo4j.io" or host.endswith(".neo4j.io")
             kwargs["connection_timeout"] = float(
-                os.environ.get("NEO4J_CONNECT_TIMEOUT", "20")
+                os.environ.get("NEO4J_CONNECT_TIMEOUT", "20" if remote else "5")
             )
             kwargs["connection_acquisition_timeout"] = float(
-                os.environ.get("NEO4J_ACQUIRE_TIMEOUT", "45")
+                os.environ.get("NEO4J_ACQUIRE_TIMEOUT", "45" if remote else "5")
             )
             kwargs["max_transaction_retry_time"] = float(
-                os.environ.get("NEO4J_RETRY_TIME", "30")
+                os.environ.get("NEO4J_RETRY_TIME", "30" if remote else "10")
             )
             # Only supply an SSL context when TLS is actually in play. Passing
             # one to a plaintext server does not downgrade gracefully -- the
@@ -329,8 +336,24 @@ class Neo4jStore(GraphStore):
                 "workspaces. Add the filter, or pass unscoped=True if crossing "
                 f"workspaces is intended.\n\n{cypher.strip()[:400]}"
             )
-        with self.driver.session(database=self._database) as s:
-            return [r.data() for r in s.run(cypher, **params)]
+        from neo4j import Query
+
+        from brahmastra.graph_health import GraphUnavailable, breaker, is_outage
+
+        breaker.before_call()
+        # A per-query ceiling, so one slow query cannot hold a request thread
+        # indefinitely. Generous: pipeline writes batch thousands of rows.
+        timeout = float(os.environ.get("NEO4J_QUERY_TIMEOUT", "120"))
+        try:
+            with self.driver.session(database=self._database) as s:
+                rows = [r.data() for r in s.run(Query(cypher, timeout=timeout), **params)]
+        except Exception as exc:
+            if is_outage(exc):
+                breaker.failure(exc)
+                raise GraphUnavailable(f"graph engine unavailable: {type(exc).__name__}: {exc}"[:300]) from exc
+            raise
+        breaker.success()
+        return rows
 
     def close(self) -> None:
         if self._driver is not None:
@@ -905,9 +928,8 @@ class Neo4jStore(GraphStore):
         rows = self._run(
             """
             MATCH (e:Entity) WHERE e.workspaceId = $ws
-            OPTIONAL MATCH (m:Mention)-[:RESOLVES_TO]->(e)
             RETURN e.clusterId AS cluster_id, e.name AS canonical_name,
-                   collect(m.text) AS mentions
+                   COLLECT { MATCH (m:Mention)-[:RESOLVES_TO]->(e) RETURN m.text } AS mentions
             """,
             ws=self.workspace,
         )
@@ -1045,13 +1067,17 @@ class Neo4jStore(GraphStore):
         blob, so what the UI renders is the graph itself and the two can no
         longer drift apart.
         """
-        meta = self._run(
-            "MATCH (g:GraphMeta {workspaceId: $ws}) RETURN g.builtAt AS builtAt, "
-            "g.statsJson AS statsJson",
+        # properties(g), not g.builtAt / g.statsJson: naming a property key the
+        # database has never stored -- every fresh install, until the first
+        # build -- makes the server warn "property key does not exist" on each
+        # call. Reading the map names no keys.
+        rows = self._run(
+            "MATCH (g:GraphMeta {workspaceId: $ws}) RETURN properties(g) AS p",
             ws=self.workspace,
         )
-        if not meta:
+        if not rows:
             return None
+        meta = [{"builtAt": rows[0]["p"].get("builtAt"), "statsJson": rows[0]["p"].get("statsJson")}]
 
         node_rows = self._run(
             """
@@ -1377,18 +1403,22 @@ class Neo4jStore(GraphStore):
 
     def stats(self) -> dict[str, int]:
         r = self._run(
+            # COUNT {} subqueries rather than OPTIONAL MATCH + count(): the
+            # old form counted over null rows and the server answered every
+            # stats call with "null value eliminated in set function"; and it
+            # named the ASSERTS relationship type, which an empty database has
+            # never seen, adding "relationship type does not exist". Both
+            # flooded the logs on every readiness probe. Matching the type by
+            # name needs no type token, so a fresh database is silent too.
             """
-            OPTIONAL MATCH (n:Note) WHERE n.workspaceId = $ws
-              WITH count(n) AS notes
-            OPTIONAL MATCH (p:Note) WHERE p.workspaceId = $ws
-              AND p.extractionStatus = 'pending'
-              WITH notes, count(p) AS pending
-            OPTIONAL MATCH (a:Mention)-[t:ASSERTS]->() WHERE a.workspaceId = $ws
-              WITH notes, pending, count(t) AS triples
-            OPTIONAL MATCH (e:Entity) WHERE e.workspaceId = $ws
-              WITH notes, pending, triples, count(e) AS entities
-            OPTIONAL MATCH (g:GraphMeta) WHERE g.workspaceId = $ws
-              RETURN notes, pending, triples, entities, count(g) AS meta
+            RETURN
+              COUNT { MATCH (n:Note) WHERE n.workspaceId = $ws } AS notes,
+              COUNT { MATCH (p:Note) WHERE p.workspaceId = $ws
+                        AND p.extractionStatus = 'pending' } AS pending,
+              COUNT { MATCH (a:Mention)-[t]->() WHERE a.workspaceId = $ws
+                        AND type(t) = 'ASSERTS' } AS triples,
+              COUNT { MATCH (e:Entity) WHERE e.workspaceId = $ws } AS entities,
+              COUNT { MATCH (g:GraphMeta) WHERE g.workspaceId = $ws } AS meta
             """,
             ws=self.workspace,
         )[0]

@@ -518,7 +518,6 @@ def comprehend_chunk(chunk: Chunk, max_tokens: int | None = None) -> ChunkUnders
     forty. This mirrors how extraction treats a note that fails: record it,
     move on, retry later.
     """
-    from brahmastra.llm import chat
 
     budget = max_tokens or int(os.environ.get("INGEST_COMPREHEND_TOKENS", "") or 1600)
     try:
@@ -715,7 +714,6 @@ def _one_pass(chunk: Chunk, system: str, budget: int,
     With a `json_schema` the provider ENFORCES the reply shape; without one it
     is merely asked for valid JSON and told the shape in prose.
     """
-    from brahmastra.llm import chat
 
     try:
         raw = _cached_chat(
@@ -968,7 +966,6 @@ def comprehend_chunk_typed(chunk: Chunk,
     because the schema now carries it. So the comparison is schema-enforcement
     against prose-description, not two different briefs.
     """
-    from brahmastra.llm import chat
 
     # Far more headroom than the prose variants need, and not optional.
     # gpt-oss-120b is a REASONING model: its reasoning tokens are spent from

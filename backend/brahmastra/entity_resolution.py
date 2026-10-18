@@ -617,7 +617,7 @@ def _embedding_sim(mentions: list[str],
         return {}
 
     try:
-        embeddings = model.encode(mentions, normalize_embeddings=True)
+        embeddings = model.encode(mentions, normalize_embeddings=True, show_progress_bar=False)
 
         result: dict[tuple[str, str], float] = {}
         n = len(mentions)

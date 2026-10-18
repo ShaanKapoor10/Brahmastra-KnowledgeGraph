@@ -7,6 +7,7 @@ import { noteTitleMap } from "@/lib/viz"
 import { GraphView } from "@/components/graph-view"
 import { EntityDetail } from "@/components/entity-detail"
 import { WorkspaceSwitcher, type WorkspaceOption } from "@/components/workspace-switcher"
+import type { GraphStatus } from "@/app/page"
 import { PipelineIndicator } from "@/components/pipeline-indicator"
 import { CentralEntities } from "@/components/panels/central-entities"
 import { ConceptClusters } from "@/components/panels/concept-clusters"
@@ -36,7 +37,18 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
 ]
 
+/** Who is signed in, as GET /auth/me returns it. */
+export interface SignedInUser {
+  kind: "session" | "token" | "service" | "anonymous"
+  role: "viewer" | "member" | "admin"
+  email: string | null
+  name: string | null
+}
+
 interface Props {
+  user?: SignedInUser | null
+  /** Whether the graph on screen is live, a stale copy, or missing (engine down). */
+  graphStatus?: GraphStatus
   initialNotes: Note[]
   initialTriples: RawTriple[]
   backendAvailable?: boolean
@@ -55,6 +67,8 @@ export function Dashboard({
   initialResult = null,
   workspace = "default",
   workspaces = [],
+  user = null,
+  graphStatus = { state: "ok" },
 }: Props) {
   const [notes, setNotes] = useState<Note[]>(initialNotes)
   const [triples, setTriples] = useState<RawTriple[]>(initialTriples)
@@ -118,7 +132,7 @@ export function Dashboard({
       // one while the screen showed this one.
       const startRes = await fetch(`/api/pipeline/run${scope}`, { method: "POST" })
       const startRaw = await startRes.text()
-      let startData: any = null
+      let startData: Record<string, unknown> | null = null
       try {
         startData = startRaw ? JSON.parse(startRaw) : null
       } catch {
@@ -258,7 +272,9 @@ export function Dashboard({
                 only see its own runs. */}
             {backendAvailable && <PipelineIndicator scope={scope} />}
 
-            {backendAvailable && (
+            {user && <UserMenu user={user} />}
+
+            {backendAvailable && user?.role !== "viewer" && (
               <button
                 onClick={runPipelineNow}
                 disabled={pipelineRunning}
@@ -314,6 +330,7 @@ export function Dashboard({
           })}
         </nav>
       </header>
+      <GraphBanner status={graphStatus} />
 
       {/* Pipeline status bar */}
       {pipelineStatus && (
@@ -371,3 +388,56 @@ export function Dashboard({
     </div>
   )
 }
+
+/** The signed-in person, their role, and a way out. */
+function UserMenu({ user }: { user: SignedInUser }) {
+  async function signOut() {
+    await fetch("/session/logout", { method: "POST" }).catch(() => undefined)
+    window.location.replace("/login")
+  }
+  const label = user.kind === "session" ? (user.name || user.email) : user.kind === "anonymous" ? "development mode" : "service key"
+  return (
+    <div className="hidden items-center gap-2 font-mono text-[11px] text-muted-foreground md:flex">
+      <span title={user.email ?? undefined}>
+        {label} · {user.role}
+      </span>
+      {user.kind === "session" && (
+        <button
+          onClick={signOut}
+          className="rounded-md border border-border px-2 py-0.5 transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          sign out
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Says plainly when the graph is not live. Notes, search and Ask keep working
+ * through a graph-engine outage, so the banner says what still works rather
+ * than letting an old or empty graph pass for the current one.
+ */
+function GraphBanner({ status }: { status: GraphStatus }) {
+  if (status.state === "ok") return null
+  const when =
+    status.state === "stale" && status.builtAt
+      ? new Date(status.builtAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+      : null
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-200 sm:px-6"
+    >
+      <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+      <p>
+        <span className="font-medium">The knowledge graph is temporarily unavailable.</span>{" "}
+        {status.state === "stale"
+          ? `You are seeing the graph as it was${when ? ` on ${when}` : ""}; it will update when the service recovers. `
+          : "There is no saved copy to show yet. "}
+        Notes, search and Ask still work, and answers come from your notes.
+      </p>
+    </div>
+  )
+}
+

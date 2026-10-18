@@ -92,5 +92,5 @@ def test_no_module_loads_dotenv_directly():
                 offenders.append(f"{path.relative_to(BACKEND)}: {stripped}")
     assert not offenders, (
         "these bypass brahmastra.env.load_env(), so BRAHMASTRA_NO_DOTENV does "
-        f"not cover them:\n  " + "\n  ".join(offenders)
+        "not cover them:\n  " + "\n  ".join(offenders)
     )

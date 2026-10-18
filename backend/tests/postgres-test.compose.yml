@@ -1,0 +1,25 @@
+# A throwaway Postgres for the integration tests (tests/_pg.py).
+#
+#   docker compose -f tests/postgres-test.compose.yml up -d
+#   BRAHMASTRA_TEST_POSTGRES_DSN=postgresql://brahmastra:brahmastra-test@localhost:5439/brahmastra_test
+#
+# tmpfs: the data lives in memory and is gone when the container stops, so a
+# run always starts clean and can never accumulate into something worth keeping.
+name: brahmastra-pytest
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    environment:
+      POSTGRES_USER: brahmastra
+      POSTGRES_PASSWORD: brahmastra-test
+      POSTGRES_DB: brahmastra_test
+    ports:
+      - "127.0.0.1:5439:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brahmastra -d brahmastra_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

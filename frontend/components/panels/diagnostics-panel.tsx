@@ -145,7 +145,7 @@ export function DiagnosticsPanel({ workspace, backendAvailable }: { workspace: s
   }, [backendAvailable, load])
 
   /** Run one safe action, say what happened, refresh. */
-  const act = async (key: string, path: string, done: (body: any) => string) => {
+  const act = async (key: string, path: string, done: (body: Record<string, unknown>) => string) => {
     setBusy(key)
     try {
       const res = await fetch(`/api${scoped(path, workspace)}`, { method: "POST" })

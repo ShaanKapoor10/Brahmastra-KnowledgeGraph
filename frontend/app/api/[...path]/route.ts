@@ -1,37 +1,48 @@
 /**
- * Proxies /api/* to the Brahmastra backend, adding authentication.
+ * Proxies /api/* to the Brahmastra backend, as the signed-in user.
  *
  * Replaces the next.config.mjs rewrite. A rewrite forwards the request as-is
- * and cannot attach an Authorization header, so as soon as the API required a
- * key every browser call through it returned 401. Doing it as a route handler
- * keeps BRAHMASTRA_API_KEY on the server while browser code carries on calling
- * /api/... unchanged.
+ * and cannot attach an Authorization header. Doing it as a route handler lets
+ * the server read the httpOnly session cookie and send it on as a bearer
+ * token, while browser code carries on calling /api/... unchanged.
+ *
+ * State-changing requests must come from this dashboard's own pages (see
+ * sameOrigin in lib/backend.ts): the credential is a cookie, so without that
+ * check another site could make a visitor's browser write into their graph.
  */
-import { backendFetch } from "@/lib/backend"
+import { backendFetch, sameOrigin } from "@/lib/backend"
 
 export const dynamic = "force-dynamic"
 
+const SAFE = new Set(["GET", "HEAD"])
+
 async function proxy(request: Request, path: string[]): Promise<Response> {
+  if (!SAFE.has(request.method) && !sameOrigin(request)) {
+    return Response.json({ detail: "Cross-site request refused." }, { status: 403 })
+  }
   const target = `/${path.join("/")}${new URL(request.url).search}`
 
-  const init: RequestInit = { method: request.method }
-  if (request.method !== "GET" && request.method !== "HEAD") {
+  const headers: Record<string, string> = {}
+  const workspace = request.headers.get("x-brahmastra-workspace")
+  if (workspace) headers["X-Brahmastra-Workspace"] = workspace
+  const init: RequestInit = { method: request.method, headers }
+  if (!SAFE.has(request.method)) {
     init.body = await request.text()
-    init.headers = { "Content-Type": request.headers.get("content-type") ?? "application/json" }
+    headers["Content-Type"] = request.headers.get("content-type") ?? "application/json"
   }
 
   try {
     const upstream = await backendFetch(target, init)
-    // Stream the body through untouched; only the auth header was added.
     return new Response(upstream.body, {
       status: upstream.status,
       headers: {
         "Content-Type": upstream.headers.get("content-type") ?? "application/json",
+        "Cache-Control": "no-store",
       },
     })
   } catch (error) {
-    // The backend being unreachable is an expected state — Aura Free suspends
-    // after a few days idle — so say so rather than surfacing a stack trace.
+    // The backend being unreachable is an expected state -- Aura Free suspends
+    // after a few days idle -- so say so rather than surfacing a stack trace.
     return Response.json(
       { detail: `Backend unreachable: ${(error as Error).message}` },
       { status: 502 },
@@ -39,12 +50,20 @@ async function proxy(request: Request, path: string[]): Promise<Response> {
   }
 }
 
-export async function GET(request: Request, ctx: { params: Promise<{ path: string[] }> }) {
+type Ctx = { params: Promise<{ path: string[] }> }
+
+export async function GET(request: Request, ctx: Ctx) {
   return proxy(request, (await ctx.params).path)
 }
-export async function POST(request: Request, ctx: { params: Promise<{ path: string[] }> }) {
+export async function POST(request: Request, ctx: Ctx) {
   return proxy(request, (await ctx.params).path)
 }
-export async function DELETE(request: Request, ctx: { params: Promise<{ path: string[] }> }) {
+export async function PATCH(request: Request, ctx: Ctx) {
+  return proxy(request, (await ctx.params).path)
+}
+export async function PUT(request: Request, ctx: Ctx) {
+  return proxy(request, (await ctx.params).path)
+}
+export async function DELETE(request: Request, ctx: Ctx) {
   return proxy(request, (await ctx.params).path)
 }

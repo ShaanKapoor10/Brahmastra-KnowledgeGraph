@@ -150,7 +150,8 @@ def test_hook_never_fails_the_session(cp, tmp_path, capsys):
     import io
     import sys
 
-    monkey = lambda text: setattr(sys, "stdin", io.StringIO(text))
+    def monkey(text):
+        return setattr(sys, "stdin", io.StringIO(text))
 
     monkey("not json at all")
     assert cp.main([]) == 0

@@ -56,7 +56,8 @@ def test_ollama_honours_the_override_too(monkeypatch):
         def __exit__(self, *a): return False
         def read(self): return b'{"message": {"content": "ok"}}'
 
-    import json, urllib.request
+    import json
+    import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen",
                         lambda req, timeout=0: sent.update(json.loads(req.data)) or Resp())
     with llm.using_model("ollama:llama3.1:8b"):

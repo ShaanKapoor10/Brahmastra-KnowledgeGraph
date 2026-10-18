@@ -1,71 +1,79 @@
-import { Dashboard } from "@/components/dashboard"
-import { SAMPLE_NOTES, SAMPLE_TRIPLES } from "@/lib/sample-notes"
+import { redirect } from "next/navigation"
+import { Dashboard, type SignedInUser } from "@/components/dashboard"
+import { IS_DEMO_BUILD, SAMPLE_NOTES, SAMPLE_TRIPLES } from "@/lib/sample-notes"
 import type { Note, RawTriple, PipelineResult } from "@/lib/types"
 import { adaptBackendGraph } from "@/lib/backend-adapter"
 import { backendFetch } from "@/lib/backend"
 import type { WorkspaceOption } from "@/components/workspace-switcher"
 import type { BackendGraphResponse } from "@/lib/backend-adapter"
 
+/** How the graph on screen relates to the live engine (see the banner in the dashboard). */
+export type GraphStatus =
+  | { state: "ok" }
+  | { state: "stale"; builtAt: string | null }
+  | { state: "unavailable" }
+
+type Loaded =
+  | { kind: "ok"; notes: Note[]; triples: RawTriple[]; result: PipelineResult | null; graph: GraphStatus }
+  | { kind: "unreachable"; reason: string }
+
 /**
- * Try to load notes, triples, and the precomputed graph from the Python backend.
- * Falls back to the seeded sample data if the backend is unavailable
- * (e.g. running without `vercel dev`, or first launch before any pipeline run).
+ * Load the workspace from the backend.
+ *
+ * Notes come from the system of record and are REQUIRED: without them there
+ * is nothing true to show, so the page says the server cannot be reached.
+ * The graph is derived and OPTIONAL: when its engine is down the backend serves
+ * the last good copy (marked stale), or nothing, and the notes still show with
+ * a banner. There is no sample-data fallback in production builds -- invented
+ * notes on a real install look like data loss (lib/sample-notes.ts).
  */
-async function loadFromBackend(workspace: string): Promise<{
-  notes: Note[]
-  triples: RawTriple[]
-  result: PipelineResult | null
-} | null> {
+async function loadFromBackend(workspace: string): Promise<Loaded> {
   // Every request names the workspace it wants. The API resolves it per
   // request, so leaving it off silently returns whichever graph the server
   // process defaults to -- which is how the dashboard could only ever show one.
   const scope = workspace === "default" ? "" : `?workspace=${encodeURIComponent(workspace)}`
 
+  let notesRes: Response
   try {
-    // backendFetch attaches BRAHMASTRA_API_KEY; this runs on the server, so
-    // the key never reaches the browser.
-    const [notesRes, triplesRes, graphRes] = await Promise.all([
-      backendFetch(`/notes${scope}`, { cache: "no-store" }),
-      backendFetch(`/graph/triples${scope}`, { cache: "no-store" }),
-      backendFetch(`/graph${scope}`, { cache: "no-store" }),
-    ])
-    if (!notesRes.ok || !triplesRes.ok || !graphRes.ok) return null
+    notesRes = await backendFetch(`/notes${scope}`, { cache: "no-store" })
+  } catch (error) {
+    return { kind: "unreachable", reason: (error as Error).message }
+  }
+  if (!notesRes.ok) return { kind: "unreachable", reason: `the notes request returned ${notesRes.status}` }
 
-    const backendNotes: Array<{
-      id: string
-      title: string
-      content: string
-      last_edited: string | null
-      extraction_status: string
-    }> = await notesRes.json()
+  const backendNotes: Array<{
+    id: string
+    title: string
+    content: string
+    last_edited: string | null
+    extraction_status: string
+  }> = await notesRes.json()
+  const notes: Note[] = backendNotes.map((n) => ({
+    id: n.id,
+    title: n.title,
+    content: n.content,
+    lastEdited: n.last_edited ?? n.id,
+    extractionStatus: n.extraction_status as Note["extractionStatus"],
+  }))
 
+  const [triplesRes, graphRes] = await Promise.all([
+    backendFetch(`/graph/triples${scope}`, { cache: "no-store" }).catch(() => null),
+    backendFetch(`/graph${scope}`, { cache: "no-store" }).catch(() => null),
+  ])
+
+  let triples: RawTriple[] = []
+  if (triplesRes?.ok) {
     const backendTriples: Array<{
       id: number
-      subject_text: string
-      subject_type: string
       relation: string
+      subject_text: string
       object_text: string
-      object_type: string
       confidence: number
       source_quote: string | null
       source_note_id: string | null
       extracted_at: string
     }> = await triplesRes.json()
-
-    const graphPayload: BackendGraphResponse = await graphRes.json()
-
-    // No data yet — let the seed data show
-    if (backendNotes.length === 0) return null
-
-    const notes: Note[] = backendNotes.map((n) => ({
-      id: n.id,
-      title: n.title,
-      content: n.content,
-      lastEdited: n.last_edited ?? n.id,
-      extractionStatus: n.extraction_status as Note["extractionStatus"],
-    }))
-
-    const triples: RawTriple[] = backendTriples.map((t) => ({
+    triples = backendTriples.map((t) => ({
       id: String(t.id),
       subjectText: t.subject_text,
       relation: t.relation as RawTriple["relation"],
@@ -75,18 +83,20 @@ async function loadFromBackend(workspace: string): Promise<{
       sourceNoteId: t.source_note_id ?? "",
       extractedAt: t.extracted_at,
     }))
-
-    // Use the precomputed graph if the backend has built one (nodes > 0)
-    const result =
-      graphPayload.graph.nodes.length > 0
-        ? adaptBackendGraph(graphPayload, notes, triples)
-        : null
-
-    return { notes, triples, result }
-  } catch {
-    // Backend not reachable — silently fall back
-    return null
   }
+
+  let graph: GraphStatus = { state: "unavailable" }
+  let result: PipelineResult | null = null
+  if (graphRes?.ok) {
+    const payload: BackendGraphResponse & {
+      availability?: { graph?: string; served_from?: string; snapshot_built_at?: string | null }
+    } = await graphRes.json()
+    graph = payload.availability?.served_from === "snapshot"
+      ? { state: "stale", builtAt: payload.availability.snapshot_built_at ?? payload.built_at }
+      : { state: "ok" }
+    if (payload.graph.nodes.length > 0) result = adaptBackendGraph(payload, notes, triples)
+  }
+  return { kind: "ok", notes, triples, result, graph }
 }
 
 /** Workspaces the backend knows about. Empty when it is unreachable. */
@@ -111,22 +121,66 @@ export default async function Page({
   // other graph rather than filtering one it already fetched.
   const workspace = (await searchParams).workspace?.trim() || "default"
 
-  const [backend, workspaces] = await Promise.all([
+  // Who is looking. 401: not signed in. 503: no accounts exist yet, and the
+  // login page explains how to create the first admin. An unreachable backend
+  // falls through, so the page still renders and says the backend is down.
+  const meRes = await backendFetch("/auth/me", { cache: "no-store" }).catch(() => null)
+  if (meRes && (meRes.status === 401 || meRes.status === 503)) {
+    const next = workspace === "default" ? "/" : `/?workspace=${encodeURIComponent(workspace)}`
+    redirect(`/login?next=${encodeURIComponent(next)}`)
+  }
+  const user: SignedInUser | null = meRes?.ok ? await meRes.json() : null
+
+  const [loaded, workspaces] = await Promise.all([
     loadFromBackend(workspace),
     loadWorkspaces(),
   ])
-  const notes = backend?.notes ?? SAMPLE_NOTES
-  const triples = backend?.triples ?? SAMPLE_TRIPLES
-  const initialResult = backend?.result ?? null
+
+  if (loaded.kind === "unreachable") {
+    // A demo build (BRAHMASTRA_DEMO_BUILD=1) may still show its sample vault
+    // with no backend at all; a production build has none to show.
+    if (IS_DEMO_BUILD) {
+      return (
+        <Dashboard
+          initialNotes={SAMPLE_NOTES}
+          initialTriples={SAMPLE_TRIPLES}
+          backendAvailable={false}
+          initialResult={null}
+          workspace={workspace}
+          workspaces={[{ id: workspace }]}
+          user={user}
+        />
+      )
+    }
+    return <Unreachable reason={loaded.reason} />
+  }
 
   return (
     <Dashboard
-      initialNotes={notes}
-      initialTriples={triples}
-      backendAvailable={backend !== null}
-      initialResult={initialResult}
+      initialNotes={loaded.notes}
+      initialTriples={loaded.triples}
+      backendAvailable
+      initialResult={loaded.result}
+      graphStatus={loaded.graph}
       workspace={workspace}
       workspaces={workspaces.length > 0 ? workspaces : [{ id: workspace }]}
+      user={user}
     />
+  )
+}
+
+/** The system of record cannot be reached: say so plainly, never show invented data. */
+function Unreachable({ reason }: { reason: string }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="max-w-md space-y-2 text-center">
+        <h1 className="text-lg font-semibold">Brahmastra can&apos;t reach its server</h1>
+        <p className="text-sm text-muted-foreground">
+          Your notes are safe; the dashboard just can&apos;t load them right now. Try again in a minute. If it
+          persists, ask your administrator to check the service.
+        </p>
+        <p className="font-mono text-[11px] text-muted-foreground">{reason}</p>
+      </div>
+    </main>
   )
 }

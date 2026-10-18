@@ -69,7 +69,7 @@ from brahmastra.ingest.comprehend import (
     comprehend_chunk_focused,
 )
 from brahmastra.ingest.consolidate import consolidate
-from brahmastra.ingest.segment import Chunk, segment
+from brahmastra.ingest.segment import Chunk
 from brahmastra.ingest.store import IngestStore, get_ingest_store
 from brahmastra import ownership
 
