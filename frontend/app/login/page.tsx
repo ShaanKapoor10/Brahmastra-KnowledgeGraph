@@ -10,6 +10,23 @@ import { Card } from "@/components/ui/card"
 
 type Status = { auth: string; users: boolean; setup_required: boolean }
 
+/**
+ * Where to go after signing in: a path on THIS site, or "/". An open redirect
+ * would let a phishing link bounce someone through this login to another site.
+ * A prefix check is not enough -- browsers read "/\evil.com" as "//evil.com" --
+ * so the target is resolved against our own origin and must stay on it.
+ */
+function safeNext(next: string | null): string {
+  if (!next) return "/"
+  try {
+    const url = new URL(next, window.location.origin)
+    if (url.origin !== window.location.origin) return "/"
+    return url.pathname + url.search + url.hash
+  } catch {
+    return "/"
+  }
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -39,10 +56,7 @@ export default function LoginPage() {
         setError(body.detail ?? "Sign-in failed.")
         return
       }
-      const next = new URLSearchParams(window.location.search).get("next")
-      // Only same-site paths: an open redirect would let a phishing link bounce
-      // someone through this login to another site.
-      window.location.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : "/")
+      window.location.replace(safeNext(new URLSearchParams(window.location.search).get("next")))
     } catch {
       setError("Could not reach the server.")
     } finally {

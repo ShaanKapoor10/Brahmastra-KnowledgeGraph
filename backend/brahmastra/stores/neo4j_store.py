@@ -38,6 +38,7 @@ import re
 import ssl
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from brahmastra.stores.base import GraphStore
 from brahmastra.workspace import (
@@ -272,7 +273,8 @@ class Neo4jStore(GraphStore):
             # it never needs to wake up, so a slow answer means it is down, and
             # the circuit breaker (graph_health.py) plus the snapshot fallback
             # turn that into a degraded dashboard instead of hung requests.
-            remote = self._encrypted() or "neo4j.io" in (self._uri or "")
+            host = (urlparse(self._uri or "").hostname or "").lower()
+            remote = self._encrypted() or host == "neo4j.io" or host.endswith(".neo4j.io")
             kwargs["connection_timeout"] = float(
                 os.environ.get("NEO4J_CONNECT_TIMEOUT", "20" if remote else "5")
             )

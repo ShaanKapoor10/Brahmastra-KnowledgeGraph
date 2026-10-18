@@ -111,6 +111,10 @@ def check_password_strength(password: str) -> None:
 
 
 def _token_hash(token: str) -> str:
+    # SHA-256 is right HERE, and wrong for passwords. A token is 32 random bytes
+    # from `secrets`, so there is nothing to guess: a slow hash only protects
+    # low-entropy secrets, and would cost scrypt on every authenticated request.
+    # Passwords use scrypt (hash_password). CodeQL alert #5 was dismissed for this.
     return hashlib.sha256(token.encode()).hexdigest()
 
 
