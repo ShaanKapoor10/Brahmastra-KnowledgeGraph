@@ -18,11 +18,13 @@ import { NotesPanel } from "@/components/panels/notes-panel"
 import { AskPanel } from "@/components/panels/ask-panel"
 import { MeetingsPanel } from "@/components/panels/meetings-panel"
 import { DiagnosticsPanel } from "@/components/panels/diagnostics-panel"
-import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope } from "lucide-react"
+import { AccountPanel } from "@/components/panels/account-panel"
+import { TeamPanel } from "@/components/panels/team-panel"
+import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users } from "lucide-react"
 
 type View =
   | "graph" | "ask" | "central" | "clusters" | "contradictions" | "links" | "resolution" | "notes"
-  | "meetings" | "diagnostics"
+  | "meetings" | "diagnostics" | "account" | "team"
 
 const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "graph", label: "Graph", icon: Network },
@@ -35,6 +37,8 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "notes", label: "Notes", icon: FileText },
   { id: "meetings", label: "Meetings", icon: CalendarDays },
   { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
+  { id: "account", label: "Account", icon: UserCog },
+  { id: "team", label: "Team", icon: Users },
 ]
 
 /** Who is signed in, as GET /auth/me returns it. */
@@ -43,6 +47,8 @@ export interface SignedInUser {
   role: "viewer" | "member" | "admin"
   email: string | null
   name: string | null
+  /** The workspaces this person may open; null means every workspace (admins). */
+  workspaces?: string[] | null
 }
 
 interface Props {
@@ -310,7 +316,11 @@ export function Dashboard({
 
         {/* Tabs */}
         <nav className="-mb-3 flex flex-wrap gap-1 overflow-x-auto">
-          {TABS.map((t) => {
+          {TABS.filter((t) =>
+            // Account needs someone signed in; Team is for admins. The backend
+            // refuses the calls either way -- this only hides tabs that would fail.
+            t.id === "account" ? Boolean(user) : t.id === "team" ? user?.role === "admin" : true,
+          ).map((t) => {
             const Icon = t.icon
             const active = view === t.id
             return (
@@ -367,6 +377,8 @@ export function Dashboard({
                 {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} />}
                 {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} />}
                 {view === "diagnostics" && <DiagnosticsPanel workspace={workspace} backendAvailable={backendAvailable} />}
+                {view === "account" && user && <AccountPanel user={user} />}
+                {view === "team" && user?.role === "admin" && <TeamPanel user={user} workspaces={workspaces} />}
               </div>
             </div>
           )}

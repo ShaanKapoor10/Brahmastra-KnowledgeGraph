@@ -156,6 +156,7 @@ services:
       TRUST_PROXY_HEADERS: "1"
       CORS_ORIGINS: ""
       MCP_HTTP: ${MCP_HTTP:-}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       # Each uvicorn worker writes its metric files here (on the tmpfs, emptied
       # at start); /metrics merges them (brahmastra/metrics.py).

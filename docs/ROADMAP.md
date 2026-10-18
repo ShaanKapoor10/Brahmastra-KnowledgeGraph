@@ -436,7 +436,14 @@ failed, run the pipeline, reprocess a meeting, distil the checkpoint queue.
 container and the scheduler container each keep their own pool, so the page shows
 the backend's view. A shared rest table would fix it; nothing has needed it yet.
 
-### 14. Dashboard: 13 React hook warnings — OPEN (found 2026-10-19)
+### 14. Dashboard: 13 React hook warnings — DONE (2026-10-19, product polish)
+
+All 13 restructured, plus three the new Team and Account screens would have
+added; both rules are errors again. Loads now run inside their effect and drop a
+reply that arrives after the workspace or selection changed (a real race: a
+slow reply for the previous workspace could overwrite the current one). Resets
+on a prop change happen during render, and the graph view renders from memoised
+layout arrays instead of refs. The original entry follows.
 
 ESLint was first wired into CI on 2026-10-19 and found 13 places where React's
 newer hook rules object: `react-hooks/set-state-in-effect` (state set inside an

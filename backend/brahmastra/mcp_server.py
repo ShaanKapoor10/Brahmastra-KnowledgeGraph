@@ -132,10 +132,124 @@ mcp = FastMCP("brahmastra", instructions=INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
+# Who is calling: every tool is scoped to the caller when served over HTTP
+# ---------------------------------------------------------------------------
+#
+# Over stdio the server is a local process started by its own user, and the
+# workspace comes from BRAHMASTRA_WORKSPACE, exactly as before. Over HTTP
+# (MCP_HTTP=1, mounted at /mcp) many people share one server, so each call is
+# re-identified from ITS OWN request -- the token, and the workspace header --
+# and checked here, inside the tool. The API middleware's bindings are not
+# relied on: tools run in the MCP session manager's task group, where they
+# are not guaranteed to arrive, which is why remote MCP used to be admin-only.
+
+WORKSPACE_HEADER = "X-Brahmastra-Workspace"
+
+
+def _http_request():
+    """The HTTP request behind this tool call, or None over stdio."""
+    try:
+        return mcp.get_context().request_context.request
+    except (LookupError, ValueError, AttributeError):
+        return None
+
+
+def _denied(detail: str) -> str:
+    return json.dumps({"error": detail}, indent=2)
+
+
+def _scoped(need: str):
+    """Require `need` (viewer | member | admin) and membership of the workspace."""
+    import functools
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            request = _http_request()
+            if request is None:
+                return fn(*args, **kwargs)
+
+            from brahmastra.accounts import bind_identity, unbind_identity
+            from brahmastra.auth import resolve_identity
+            from brahmastra.workspace import (
+                InvalidWorkspaceId,
+                current_workspace,
+                reset_request_workspace,
+                set_request_workspace,
+                validate_id,
+            )
+
+            identity, problem = resolve_identity(request)
+            if identity is None:
+                return _denied(problem[1])
+            if not identity.at_least(need):
+                return _denied(f"This tool needs the {need} role; you are a {identity.role}.")
+            requested = (request.headers.get(WORKSPACE_HEADER)
+                         or request.query_params.get("workspace") or "").strip()
+            try:
+                workspace = validate_id(requested) if requested else current_workspace()
+            except InvalidWorkspaceId as e:
+                return _denied(f"invalid workspace: {e}")
+            if not identity.can_open(workspace):
+                return _denied(f"You are not a member of the workspace '{workspace}'.")
+
+            ws_token = set_request_workspace(workspace)
+            id_token = bind_identity(identity)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                unbind_identity(id_token)
+                reset_request_workspace(ws_token)
+        return wrapper
+    return decorate
+
+
+def allowed_hosts_and_origins(env: dict[str, str] | None = None) -> tuple[list[str], list[str]]:
+    """Host and Origin values remote MCP accepts (DNS-rebinding protection).
+
+    The SDK's default accepts only localhost, so behind Caddy -- where the Host
+    header is the install's domain -- every remote MCP request was refused with
+    421, and nobody saw it because remote MCP had only been tried locally. The
+    protection stays on; it is told this install's own name instead:
+    MCP_ALLOWED_HOSTS if set (comma-separated), else the host of PUBLIC_URL and
+    DOMAIN, plus localhost for a server reached from its own machine.
+    """
+    from urllib.parse import urlparse
+
+    env = dict(os.environ if env is None else env)
+    hosts = ["localhost", "127.0.0.1", "[::1]"]
+    origins: list[str] = []
+    explicit = [h.strip() for h in env.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    public = env.get("PUBLIC_URL", "").strip()
+    if public:
+        origins.append(public.rstrip("/"))
+        if urlparse(public).hostname:
+            hosts.append(urlparse(public).hostname or "")
+    if env.get("DOMAIN", "").strip():
+        hosts.append(env["DOMAIN"].strip())
+    hosts += explicit
+    for origin in env.get("CORS_ORIGINS", "").split(","):
+        if origin.strip() and origin.strip() != "*":
+            origins.append(origin.strip().rstrip("/"))
+    hosts = list(dict.fromkeys(h.lower() for h in hosts if h))
+    # "name:*" admits the name on any port (a trial install on :8443).
+    return [*hosts, *(f"{h}:*" for h in hosts)], list(dict.fromkeys(origins))
+
+
+def _visible(workspace_id: str | None) -> bool:
+    """Whether the caller may see a workspace (always, over stdio)."""
+    from brahmastra.accounts import current_identity
+
+    identity = current_identity()
+    return identity is None or identity.can_open(workspace_id or "")
+
+
+# ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_scoped("member")
 def brahmastra_run_pipeline(mode: str = "incremental") -> str:
     """
     Run the Brahmastra concept graph pipeline.
@@ -148,6 +262,7 @@ def brahmastra_run_pipeline(mode: str = "incremental") -> str:
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_get_graph_stats() -> str:
     """
     See what this memory contains before relying on it — or on finding it empty.
@@ -176,6 +291,7 @@ def brahmastra_get_graph_stats() -> str:
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_search_entities(query: str = "", entity_type: str = "", limit: int = 10) -> str:
     """
     Find a NAMED thing in the graph — a person, file, service, project.
@@ -206,6 +322,7 @@ def brahmastra_search_entities(query: str = "", entity_type: str = "", limit: in
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_search_notes(query: str, limit: int = 10) -> str:
     """
     RECALL what is already known about a topic. Start here on unfamiliar work.
@@ -238,6 +355,7 @@ def brahmastra_search_notes(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_search_sessions(query: str, limit: int = 8) -> str:
     """
     RECALL from the raw conversations of past coding sessions, verbatim.
@@ -264,6 +382,7 @@ def brahmastra_search_sessions(query: str, limit: int = 8) -> str:
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_search_code(query: str, scope: str = "source", limit: int = 6) -> str:
     """
     FIND where something is implemented in this repository -- file and lines.
@@ -287,6 +406,7 @@ def brahmastra_search_code(query: str, scope: str = "source", limit: int = 6) ->
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_get_entity_details(entity_name: str) -> str:
     """Return full details for a named entity: aliases, PageRank, cluster, and all relations."""
     db.init_db()
@@ -338,6 +458,7 @@ def brahmastra_get_entity_details(entity_name: str) -> str:
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_get_contradictions() -> str:
     """
     Facts that conflict — where something recorded once was later contradicted.
@@ -354,6 +475,7 @@ def brahmastra_get_contradictions() -> str:
 
 
 @mcp.tool()
+@_scoped("member")
 def brahmastra_add_note(
     title: str, content: str, note_id: str = "", publish: bool = False
 ) -> str:
@@ -406,6 +528,7 @@ def brahmastra_add_note(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_list_workspaces() -> str:
     """
     List the knowledge graphs available, and which one is currently active.
@@ -417,11 +540,12 @@ def brahmastra_list_workspaces() -> str:
     db.init_db()
     return json.dumps({
         "current": db.workspace(),
-        "workspaces": db.list_workspaces(),
+        "workspaces": [w for w in db.list_workspaces() if _visible(w.get("id"))],
     }, indent=2)
 
 
 @mcp.tool()
+@_scoped("admin")
 def brahmastra_create_workspace(
     name: str,
     id: str = "",
@@ -466,6 +590,7 @@ def brahmastra_create_workspace(
 
 
 @mcp.tool()
+@_scoped("viewer")
 def brahmastra_search_all_workspaces(query: str, limit: int = 10) -> str:
     """
     Search the full text of notes across EVERY workspace.
@@ -476,7 +601,13 @@ def brahmastra_search_all_workspaces(query: str, limit: int = 10) -> str:
     """
     db.init_db()
     try:
-        hits = db.search_notes_across(query, None, limit)
+        from brahmastra.accounts import current_identity
+
+        identity = current_identity()
+        # Only the workspaces this caller may open; None (every one) only for
+        # callers who may open every one, or over stdio.
+        allowed = None if identity is None or identity.workspaces is None else sorted(identity.workspaces)
+        hits = db.search_notes_across(query, allowed, limit) if allowed != [] else []
     except NotImplementedError as e:
         return json.dumps({"error": str(e)}, indent=2)
     return json.dumps({

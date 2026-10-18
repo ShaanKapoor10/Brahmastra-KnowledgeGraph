@@ -269,6 +269,13 @@ if _mcp_http_enabled():
     # client pointed at /mcp gets a 404 and reports the server as unreachable.
     # Serve it at the mount root instead, so the URL is exactly /mcp.
     _mcp.settings.streamable_http_path = "/"
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    from brahmastra.mcp_server import allowed_hosts_and_origins
+
+    _hosts, _origins = allowed_hosts_and_origins()
+    _mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=_hosts, allowed_origins=_origins)
     app.mount("/mcp", _mcp.streamable_http_app())
 
 @app.exception_handler(Exception)

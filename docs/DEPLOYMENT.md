@@ -181,8 +181,10 @@ python -m brahmastra.accounts create-admin --email you@example.com
 # docker compose exec backend python -m brahmastra.accounts create-admin --email you@example.com
 ```
 
-Then open the dashboard and sign in. Admins add everyone else (API, or the
-settings screen once it ships). On a host with no shell, set
+Then open the dashboard and sign in. Admins add everyone else in the **Team**
+tab: an account is created with a temporary password, shown once, which the
+person changes under **Account** (there is no invitation email, so an install
+needs no mail server). The same is available as `POST /auth/users`. On a host with no shell, set
 `BRAHMASTRA_SETUP_TOKEN` to a long random value: `POST /auth/setup` with that
 token creates the first admin, once, and is closed as soon as a user exists.
 Without the token the route does not exist, so a fresh public install cannot
@@ -225,11 +227,15 @@ listings, so a member cannot even learn another workspace's name.
 - Cross-site requests: the dashboard refuses state-changing requests whose `Origin` is not its
   own host. CORS is closed unless `CORS_ORIGINS` lists origins.
 - Rate limits per user (`RATE_LIMITS`, see `brahmastra/ratelimit.py`): `/ask` 30/min, pipeline
-  20/h, ingest 30/h, writes 300/min, reads 1200/min.
+  20/h, ingest 30/h, writes 300/min, reads 1200/min. The three that spend money (ask,
+  pipeline, ingest) are counted in the notes database, so they hold across every worker;
+  reads and writes are counted per process.
 - The last active admin cannot be demoted, disabled or deleted.
 - Audit log (`GET /auth/audit`, admin): sign-ins, failures, lockouts, user and token changes.
-- Remote MCP (`/mcp`) is admin-only for now: its tools are not yet scoped per user, and one of
-  them searches every workspace.
+- Remote MCP (`/mcp`) is open to every signed-in role, and each tool checks the caller's own
+  role and workspace membership on every call (`mcp_server._scoped`): viewers search and read,
+  members also add notes and run the pipeline, only admins create workspaces, and the
+  cross-workspace search returns only workspaces the caller may open.
 
 `/health` and `/health/ready` stay open, because an orchestrator's health
 checker cannot carry a token. `/health/ready` reports which auth state the
@@ -346,8 +352,15 @@ When a client cannot reach Neo4j directly, or you want a single authenticated
 door, set `MCP_HTTP=1` and the same ten tools are served at `/mcp`, mounted
 inside the FastAPI app so they inherit the API's authentication — one boundary,
 not a second unprotected way into the same graph. Verified: `/mcp` returns 401
-without a key. Use an admin's personal API token: until the tools are scoped
-per user, `/mcp` is admin-only.
+without a key. Use your own personal API token (dashboard → **Account**): every
+tool acts as you, with your role, in the workspace named by the
+`X-Brahmastra-Workspace` header (default `default`). `tests/test_mcp_scoping.py`
+proves this over a real MCP session.
+
+The MCP SDK refuses requests whose `Host` header it does not recognise (DNS
+rebinding protection). It is told this install's own name: the host of
+`PUBLIC_URL`, `DOMAIN`, and localhost; add others with `MCP_ALLOWED_HOSTS`
+(comma-separated). Without this every request through Caddy was refused with 421.
 
 ```json
 {
@@ -355,7 +368,8 @@ per user, `/mcp` is admin-only.
     "brahmastra": {
       "type": "http",
       "url": "https://your-host/mcp",
-      "headers": { "Authorization": "Bearer bra_YOUR_PERSONAL_TOKEN" }
+      "headers": { "Authorization": "Bearer bra_YOUR_PERSONAL_TOKEN",
+                   "X-Brahmastra-Workspace": "default" }
     }
   }
 }

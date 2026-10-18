@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
 import { Dashboard, type SignedInUser } from "@/components/dashboard"
+import { SignOutButton } from "@/components/sign-out-button"
 import { IS_DEMO_BUILD, SAMPLE_NOTES, SAMPLE_TRIPLES } from "@/lib/sample-notes"
 import type { Note, RawTriple, PipelineResult } from "@/lib/types"
 import { adaptBackendGraph } from "@/lib/backend-adapter"
@@ -119,7 +120,8 @@ export default async function Page({
   // The workspace lives in the URL so a selection is shareable and survives a
   // reload, and so the server component below actually re-renders with the
   // other graph rather than filtering one it already fetched.
-  const workspace = (await searchParams).workspace?.trim() || "default"
+  const requested = (await searchParams).workspace?.trim() || ""
+  let workspace = requested || "default"
 
   // Who is looking. 401: not signed in. 503: no accounts exist yet, and the
   // login page explains how to create the first admin. An unreachable backend
@@ -130,6 +132,17 @@ export default async function Page({
     redirect(`/login?next=${encodeURIComponent(next)}`)
   }
   const user: SignedInUser | null = meRes?.ok ? await meRes.json() : null
+
+  // Which graph to open. Someone who is not a member of `default` used to land
+  // on it anyway and be told the server was unreachable (the notes call was
+  // refused with 403). Land them on a workspace they can open instead, and say
+  // plainly when they asked for one they cannot.
+  const allowed = user?.workspaces ?? null            // null: every workspace
+  if (allowed && !allowed.includes(workspace)) {
+    if (requested) return <NoAccess workspace={requested} allowed={allowed} />
+    if (allowed.length === 0) return <NoAccess workspace={null} allowed={[]} />
+    workspace = allowed[0]
+  }
 
   const [loaded, workspaces] = await Promise.all([
     loadFromBackend(workspace),
@@ -180,6 +193,37 @@ function Unreachable({ reason }: { reason: string }) {
           persists, ask your administrator to check the service.
         </p>
         <p className="font-mono text-[11px] text-muted-foreground">{reason}</p>
+      </div>
+    </main>
+  )
+}
+
+/** Signed in, but not a member of the workspace asked for (or of any yet). */
+function NoAccess({ workspace, allowed }: { workspace: string | null; allowed: string[] }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="max-w-md space-y-3 text-center">
+        <h1 className="text-lg font-semibold">
+          {workspace ? <>You don&apos;t have access to &ldquo;{workspace}&rdquo;</> : "No workspaces yet"}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {allowed.length > 0
+            ? "Open one of your workspaces, or ask an admin to add you to this one."
+            : "Your account is not a member of any workspace. Ask an admin to add you to one."}
+        </p>
+        {allowed.length > 0 && (
+          <ul className="flex flex-wrap justify-center gap-2">
+            {allowed.map((w) => (
+              <li key={w}>
+                <a href={`/?workspace=${encodeURIComponent(w)}`}
+                   className="rounded-md border border-border px-2.5 py-1 font-mono text-xs hover:bg-secondary">
+                  {w}
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+        <SignOutButton className="text-xs text-muted-foreground underline underline-offset-2" />
       </div>
     </main>
   )

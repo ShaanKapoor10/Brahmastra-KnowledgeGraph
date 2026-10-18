@@ -224,9 +224,9 @@ def test_account_events_are_audited(make_app):
     assert {"user.create", "login.failed", "login"} <= set(actions)
 
 
-def test_remote_mcp_is_admin_only_until_tools_are_scoped_per_user():
+def test_remote_mcp_admits_any_signed_in_role_and_tools_check_their_own():
     from brahmastra.auth import required_role
-    assert required_role("POST", "/mcp") == "admin"
+    assert required_role("POST", "/mcp") == "viewer"     # each tool checks its own role (test_mcp_scoping.py)
     assert required_role("GET", "/notes") == "viewer"
     assert required_role("POST", "/ask") == "viewer"
     assert required_role("POST", "/notes") == "member"

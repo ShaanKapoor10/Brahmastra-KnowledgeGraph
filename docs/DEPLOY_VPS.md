@@ -106,8 +106,9 @@ For unattended installs (Ansible, cloud-init), pass the password on stdin:
 
 ## 5. After install
 
-1. Sign in at `https://kb.example.com` and add your team under accounts
-   (`POST /v1/auth/users`, or the settings screen once it ships).
+1. Sign in at `https://kb.example.com` and add your team in the **Team** tab.
+   Each account starts with a temporary password, shown once; people change it
+   under **Account**, where they also create API tokens for MCP clients.
 2. **Monitoring:** point an uptime monitor at `https://kb.example.com/healthz`.
    Set `BACKUP_HEARTBEAT_URL` and `RESTORE_TEST_HEARTBEAT_URL` to dead-man's
    switches.
@@ -143,7 +144,7 @@ restores, upgrades, rollbacks and rebuilding the graph.
   as environment variables, so anyone who can run `docker inspect` on the host
   can read them. Limit host access accordingly. Moving to Docker secrets or a
   vault is on the roadmap.
-- **Remote MCP** (`/v1/mcp`, with `MCP_HTTP=1`) accepts admin tokens only,
-  until its tools are scoped per user.
+- **Remote MCP** (`/v1/mcp`, with `MCP_HTTP=1`) accepts every signed-in role;
+  each tool checks the caller's role and workspace membership itself.
 - **Single host:** this layout runs on one server. High availability (managed
   Postgres, several app instances) is a later phase.
