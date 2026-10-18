@@ -425,7 +425,9 @@ def test_the_retry_actually_waits_the_advised_time(monkeypatch):
     monkeypatch.setattr(extraction.time, "sleep", lambda s: slept.append(s))
 
     assert extraction._extract_with_groq("T", "C", "key") == []
-    assert slept and slept[0] == pytest.approx(8.6), (
+    # 8.6 s minus the microseconds already elapsed: the wait is measured on the
+    # monotonic clock (groq_pool), so an exact 8.6 holds only on a slow machine.
+    assert slept and slept[0] == pytest.approx(8.6, abs=0.01), (
         f"waited {slept} instead of the 8.5s the server asked for"
     )
 
