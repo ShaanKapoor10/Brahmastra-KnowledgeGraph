@@ -72,8 +72,11 @@ def triples_for(transcript_id: str) -> tuple[str, list[dict[str, Any]]]:
     artifacts = [a for a in artifacts if a.get("id") not in rejected]
     chunks = [_chunk_from_row(r) for r in store.get_chunks(transcript_id)]
     by_index = {c.index: c for c in chunks}
-    artifacts = [{**a, "said_by": speaker_of(a.get("quote") or "", by_index.get(a.get("chunk_index")))}
-                 for a in artifacts]
+    def chunk_of(a: dict[str, Any]) -> _StoredChunk | None:
+        index = a.get("chunk_index")
+        return by_index.get(int(index)) if index is not None else None
+
+    artifacts = [{**a, "said_by": speaker_of(a.get("quote") or "", chunk_of(a))} for a in artifacts]
     meeting = gr.meeting_name(record.get("title") or transcript_id, record.get("occurred_at"))
     participants = sorted({s for c in chunks for s in c.speakers})
     note_id = gr.record_note_id(transcript_id)

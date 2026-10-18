@@ -11,7 +11,9 @@
 #   1. preflight: Docker and Compose v2, memory, disk, ports, DNS
 #   2. writes deploy/.env.production (mode 600) from the template, generating
 #      every empty secret; never prints one
-#   3. builds the images for the pinned BRAHMASTRA_VERSION and starts the stack
+#   3. installs the pinned BRAHMASTRA_VERSION and starts the stack: the signed
+#      release images, verified and pulled by digest (RELEASE_SOURCE=registry,
+#      the default), or images built here from the tag (RELEASE_SOURCE=source)
 #   4. waits until the API is healthy, then creates the first admin if none exists
 #   5. runs a first backup, so the install starts with one
 # shellcheck source=lib.sh
@@ -126,12 +128,33 @@ fi
 # ---- 3. build and start ---------------------------------------------------------------
 version="$(current_version)"
 [ -n "${version}" ] || die "BRAHMASTRA_VERSION is empty in deploy/.env.production"
-info "building images for ${BOLD}${version}${OFF} (first build takes several minutes)"
-compose_build --pull --quiet
+case "$(release_source)" in
+  registry)
+    [ -n "$(env_get GHCR_PULL_TOKEN)" ] || warn "GHCR_PULL_TOKEN is empty: pulling private release images will fail"
+    if [ -f "${RELEASE_DIR}/last-known-good.env" ] && [ "$(manifest_get "${RELEASE_DIR}/last-known-good.env" VERSION)" = "${version}" ] \
+       && all_images_present "${RELEASE_DIR}/last-known-good.env"; then
+      ok "release v${version} already installed and verified"
+    else
+      info "verifying and pulling the signed release ${BOLD}v${version}${OFF}"
+      git -C "${REPO_DIR}" fetch --quiet --tags origin || warn "could not fetch tags; using the tags present locally"
+      prepare_release "${version}" || die "release v${version} failed verification; nothing was started"
+      use_images_from "${RELEASE_DIR}/v${version}/release.env"
+    fi
+    ;;
+  source)
+    info "building images for ${BOLD}${version}${OFF} (first build takes several minutes)"
+    use_images_from ""
+    compose_build --pull --quiet
+    ;;
+  *) die "RELEASE_SOURCE must be registry or source" ;;
+esac
 "${COMPOSE[@]}" up -d --remove-orphans
 info "waiting for the API to become healthy"
 wait_healthy 420 || die "the API did not become healthy. See: docker compose -f deploy/docker-compose.prod.yml logs backend"
 ok "stack is up"
+if [ "$(release_source)" = registry ] && [ -f "${RELEASE_DIR}/v${version}/release.env" ]; then
+  record_known_good "${RELEASE_DIR}/v${version}/release.env"
+fi
 
 # ---- 4. first admin -------------------------------------------------------------------
 users=$("${COMPOSE[@]}" exec -T backend python -c \

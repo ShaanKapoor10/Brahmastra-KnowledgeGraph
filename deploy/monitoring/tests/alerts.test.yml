@@ -18,7 +18,7 @@ tests:
             exp_annotations:
               summary: "The knowledge-graph engine (Neo4j) is unavailable; the product is degraded"
               description: "Notes, search and Ask still work; the dashboard shows the last saved graph with a banner."
-              runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#graph-engine-down"
+              runbook_url: "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph/blob/main/docs/RUNBOOK.md#graph-engine-down"
 
   - name: a backup older than 26 hours pages
     interval: 1h
@@ -36,7 +36,7 @@ tests:
             exp_annotations:
               summary: "No successful backup for more than 26 hours"
               description: "The newest good backup is 1d 3h 0m 0s old."
-              runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#backup-failed"
+              runbook_url: "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph/blob/main/docs/RUNBOOK.md#backup-failed"
 
   - name: a fast error burn pages, a trickle does not
     interval: 1m
@@ -57,7 +57,7 @@ tests:
             exp_annotations:
               summary: "API errors are burning the monthly error budget 14x too fast"
               description: "10% of API requests failed over the last hour (objective: 99.5% succeed)."
-              runbook_url: "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md#error-budget-burn"
+              runbook_url: "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph/blob/main/docs/RUNBOOK.md#error-budget-burn"
 
   - name: a healthy service raises nothing
     interval: 1m

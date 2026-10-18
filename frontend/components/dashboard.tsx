@@ -132,7 +132,7 @@ export function Dashboard({
       // one while the screen showed this one.
       const startRes = await fetch(`/api/pipeline/run${scope}`, { method: "POST" })
       const startRaw = await startRes.text()
-      let startData: any = null
+      let startData: Record<string, unknown> | null = null
       try {
         startData = startRaw ? JSON.parse(startRaw) : null
       } catch {

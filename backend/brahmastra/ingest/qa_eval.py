@@ -69,7 +69,7 @@ def stage_coverage(labels: list[dict[str, Any]], stages: dict[str, list[str]]) -
     """Which labels are still present, stage by stage."""
     from brahmastra.ingest.evaluate import _matcher, for_kind
 
-    every = [l["statement"] for l in labels] + [t for texts in stages.values() for t in texts]
+    every = [line["statement"] for line in labels] + [t for texts in stages.values() for t in texts]
     compare, threshold = _matcher(every)
     out: dict[str, Any] = {}
     for stage, texts in stages.items():
@@ -221,7 +221,8 @@ def main(argv: list[str] | None = None) -> int:
     result = run(args.case, args.qa, args.judge)
     if args.out:
         args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-    w = lambda s: sys.stdout.buffer.write((str(s) + "\n").encode("utf-8"))
+    def w(s):
+        return sys.stdout.buffer.write((str(s) + "\n").encode("utf-8"))
     w(f"\n{result['case']} ({result['mode']}): ingest {result['ingest_status']}, "
       f"pipeline {result['pipeline_status']}, {result['notes']} notes, {result['triples']} triples")
     w(f"  facts present by stage: {result['coverage']}")

@@ -20,7 +20,6 @@ Usage:  from brahmastra.notion_writeback import push_insights
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 # Ensure NOTION_TOKEN is available regardless of entrypoint
@@ -293,13 +292,13 @@ def push_insights() -> dict[str, Any]:
         children: list[dict[str, Any]] = []
         if rel_lines:
             children.append(_heading("Relationships found:"))
-            children.extend(_bullet(l) for l in rel_lines)
+            children.extend(_bullet(line) for line in rel_lines)
         if contra_lines:
             children.append(_heading("⚠️ Contradictions:"))
-            children.extend(_bullet(l) for l in contra_lines)
+            children.extend(_bullet(line) for line in contra_lines)
         if pred_lines:
             children.append(_heading("🔗 Suggested connections:"))
-            children.extend(_bullet(l) for l in pred_lines[:5])
+            children.extend(_bullet(line) for line in pred_lines[:5])
 
         if not children:
             skipped += 1

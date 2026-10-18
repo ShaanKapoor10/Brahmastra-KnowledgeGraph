@@ -1,0 +1,12 @@
+# Trivy findings we have reviewed and accepted (image scans in
+# .github/workflows/security.yml run with --ignore-unfixed, HIGH and CRITICAL).
+# Every entry needs a statement (why it does not affect Brahmastra) and an
+# expired_at date; past it, Trivy reports the finding again and the build fails
+# until someone looks. .github/scripts/audit_gate.py enforces both fields.
+#
+# vulnerabilities:
+#   - id: CVE-2026-00000
+#     paths: ["usr/lib/x86_64-linux-gnu/libexample.so"]
+#     statement: "Only reachable through the LDAP backend, which the image never loads."
+#     expired_at: 2026-12-31
+vulnerabilities: []

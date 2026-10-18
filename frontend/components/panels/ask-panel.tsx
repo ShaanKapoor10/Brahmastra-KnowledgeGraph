@@ -103,16 +103,18 @@ export function AskPanel({ backendAvailable = false }: { backendAvailable?: bool
         body: JSON.stringify({ question: query, mode: "auto" }),
       })
       const raw = await res.text()
-      let data: any = null
+      let data: Record<string, unknown> | null = null
       try {
         data = raw ? JSON.parse(raw) : null
       } catch {
         data = null
       }
       if (!res.ok) {
-        setError(data?.detail ?? raw?.slice(0, 160) ?? res.statusText)
+        const detail = typeof data?.detail === "string" ? data.detail : null
+        setError(detail ?? raw?.slice(0, 160) ?? res.statusText)
       } else {
-        setResult(data as AskResult)
+        // The API's response shape for /ask (routers/ask.py).
+        setResult(data as unknown as AskResult)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

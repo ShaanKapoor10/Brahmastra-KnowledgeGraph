@@ -1,0 +1,11 @@
+# Review routing. Ownership becomes a merge requirement only once a second
+# maintainer exists (the main ruleset then turns on code-owner review); until
+# then it routes review requests.
+*                       @ShaanKapoor10
+
+# Changes here alter what is trusted, released or deployed.
+/.github/               @ShaanKapoor10
+/deploy/                @ShaanKapoor10
+/backend/uv.lock        @ShaanKapoor10
+/frontend/pnpm-lock.yaml @ShaanKapoor10
+/LICENSE                @ShaanKapoor10

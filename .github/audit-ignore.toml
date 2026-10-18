@@ -1,0 +1,16 @@
+# Dependency advisories we have reviewed and accepted, for pip-audit and
+# pnpm audit (.github/scripts/audit_gate.py). Every entry needs:
+#
+#   id       the advisory id (GHSA-..., PYSEC-..., or a CVE alias)
+#   reason   why it does not affect Brahmastra -- the code path, not "low risk"
+#   expires  YYYY-MM-DD; after it the build FAILS until someone looks again
+#
+# Prefer upgrading. An entry here is for a fix we cannot take yet, or an
+# advisory in code we never call. Example:
+#
+# [[ignore]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# reason = "Only the YAML loader is affected; we never parse untrusted YAML."
+# expires = 2026-12-31
+#
+# Trivy has its own file in its own format: .trivyignore.yaml.

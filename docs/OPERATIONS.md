@@ -129,17 +129,68 @@ cd deploy && ./upgrade.sh 0.3.0      # to the release tagged v0.3.0
 `upgrade.sh`:
 1. Refuses to start if another upgrade is running, the checkout has local
    changes, the tag does not exist, the config is invalid, or disk space is low.
-2. **Takes a backup.** If the backup fails, the upgrade does not start.
-3. Builds images tagged with the new version. If the build fails, nothing
-   changes.
-4. Switches `BRAHMASTRA_VERSION` and restarts. Schema migrations run as the
+2. **Obtains the release without touching anything running** (see *Signed
+   releases* below): verifies the signed manifest and every image, then pulls
+   them by digest. With `RELEASE_SOURCE=source` it builds from the tag instead.
+   Any failure here changes nothing.
+3. **Takes a backup.** If the backup fails, the upgrade does not start.
+4. Checks out the tag (its compose file, Caddyfile and alert rules), points the
+   install at the new images, and restarts. Schema migrations run as the
    backend starts.
-5. Waits for the health check. If it fails, it **puts the previous version
-   back**, checks again, and alerts either way.
+5. Waits for the health check. Healthy: the release is recorded as
+   **last-known-good**. Unhealthy: it **puts the previous images back by their
+   recorded digests**, checks again, and alerts either way.
 
 Every upgrade and rollback is recorded in `deploy/upgrade-history.log`.
 Versions are always explicit: no image uses `:latest`, so a restart never
 changes what runs.
+
+### Signed releases
+
+A release is made by pushing a `v*` tag on a commit that is on `main`
+(`.github/workflows/release.yml`). The workflow builds the three images, pushes
+them to GHCR (private), signs each one with cosign keyless signing, attaches
+SLSA build provenance and an SPDX SBOM, and publishes `release.env` on the
+GitHub release: the version, the commit, and each image as `image@sha256:…`.
+That file is signed too, as a Sigstore bundle.
+
+Before a server installs anything, `deploy/lib.sh` (`prepare_release`) checks:
+
+| Check | Refuses when |
+|---|---|
+| `release.env` signature | it was not signed by `release.yml` **for this exact tag** in this repository, through GitHub's OIDC issuer |
+| `release.env` contents | an unexpected key, a missing image, a tag instead of a digest, an image outside `ghcr.io/<owner>/brahmastra-*`, or another version |
+| the tag | the local tag is not the commit the manifest names (the config would not match the images) |
+| every image | its signature does not verify against the same identity. All are checked **before any is pulled** |
+
+The trusted identity is pinned in `deploy/lib.sh` (`RELEASE_REPO`,
+`RELEASE_WORKFLOW`, `OIDC_ISSUER`), never read from the env file or from
+anything downloaded. cosign itself runs from an image pinned by digest.
+`deploy/tests/release-verify-test.sh` covers each refusal, and the release
+workflow's last job runs `prepare_release` against the release it has just
+published, which is exactly what a server will run.
+
+The server needs `GHCR_PULL_TOKEN` in `deploy/.env.production`: a token that
+can **only read packages** (classic PAT with `read:packages`, or a fine-grained
+token), from the repository owner or a machine user with read access. It is
+used through a throwaway Docker config and never touches the host's own
+`docker login`.
+
+**Rollback records** live in `deploy/releases/` (per server, gitignored):
+`v<version>/release.env` for every verified release, `last-known-good.env`
+for the release that last passed its health check, and `previous-known-good.env`
+for the one before it. An automatic rollback restores `last-known-good`.
+`./upgrade.sh --rollback` uses `previous-known-good` when its images are still
+on the host, and otherwise verifies the release again from GitHub.
+
+To verify a release by hand:
+
+```bash
+cosign verify-blob --bundle release.env.sigstore.json release.env \
+  --certificate-identity "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph/.github/workflows/release.yml@refs/tags/v0.3.0" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/shaankapoor10/brahmastra-backend@sha256:… --repo ShaanKapoor10/Brahmastra-KnowledgeGraph
+```
 
 ## The migration rule: backward compatible, always
 

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from brahmastra import db
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 

@@ -133,8 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.enforce:
         try:
             check(check_admin=False)
-        except UnsafeConfiguration as e:
-            return int(e.code)
+        except UnsafeConfiguration:
+            return 78                                          # EX_CONFIG
         return 0
     refuse, warn = problems()
     mode = "production" if is_production() else "development (checks apply only when BRAHMASTRA_ENV=production)"

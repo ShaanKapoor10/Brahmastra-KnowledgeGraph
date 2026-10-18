@@ -70,12 +70,13 @@ docker compose version          # must be v2
 ## 4. Install Brahmastra
 
 ```bash
-git clone https://github.com/<your-org>/vaultgraph-qy.git brahmastra && cd brahmastra
+git clone https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph.git brahmastra && cd brahmastra
 git checkout v0.2.0                                   # a release tag, never a branch
 
 cp deploy/.env.production.example deploy/.env.production
 chmod 600 deploy/.env.production
-nano deploy/.env.production    # fill in: LLM keys, RESTIC_REPOSITORY + AWS_* keys,
+nano deploy/.env.production    # fill in: GHCR_PULL_USER + GHCR_PULL_TOKEN (read:packages
+                               # only), LLM keys, RESTIC_REPOSITORY + AWS_* keys,
                                # ALERT_WEBHOOK_URL, heartbeat URLs (optional), TZ
 
 cd deploy
@@ -85,7 +86,8 @@ cd deploy
 `setup.sh`:
 - checks Docker, memory, disk, free ports and DNS;
 - generates every empty secret without printing it;
-- builds and starts the stack;
+- verifies the signed release and pulls its images by digest (or, with
+  `RELEASE_SOURCE=source`, builds them here), then starts the stack;
 - waits until it is healthy;
 - creates the first admin, prompting for the password;
 - takes a first backup.

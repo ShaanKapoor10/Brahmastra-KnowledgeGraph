@@ -393,8 +393,9 @@ def where_defined(names: list[str], store: CodeIndex | None = None) -> list[str]
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    say = lambda obj: sys.stdout.buffer.write(
-        (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    def say(obj):
+        return sys.stdout.buffer.write(
+            (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     if argv[:1] == ["--index"]:
         say(index_repo(argv[1] if len(argv) > 1 else REPO_ROOT))
     elif argv[:1] == ["--search"] and len(argv) > 1:

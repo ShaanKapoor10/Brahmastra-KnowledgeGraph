@@ -1,0 +1,167 @@
+# Security scans. Called by CI on every pull request and push to main (so they
+# count toward ci-success), and run on their own every night: a dependency that
+# was clean yesterday can have an advisory today, with no commit to trigger CI.
+#
+# What fails the build, and what only reports:
+#   gitleaks    any secret, anywhere in the FULL history         -> fail
+#   pip-audit   an advisory with a fixed version (backend)        -> fail
+#   pnpm audit  an advisory with a fixed version (prod closure)   -> fail
+#   Trivy       HIGH/CRITICAL with a fix, in each image           -> fail
+#   licences    a licence outside docs/LICENSES.md's allowlist    -> fail
+#   CodeQL      code scanning alerts                              -> Security tab
+# Advisories with no fix are printed, not failed: nothing we change clears them.
+# Exceptions need a reason and an expiry: .github/audit-ignore.toml (pip, pnpm)
+# and .trivyignore.yaml (Trivy), both validated by .github/scripts/audit_gate.py.
+name: Security
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "17 3 * * *"        # nightly, 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No concurrency group here: when CI calls this workflow, CI's group governs it.
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: gitleaks
+        run: >
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --config /repo/.gitleaks.toml --redact=100 --verbose --exit-code 1
+
+  python-deps:
+    name: Backend dependencies (pip-audit, licences)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.30"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: pip-audit (what ships, hash-pinned)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt -o "${RUNNER_TEMP}/requirements.txt"
+          uv sync --frozen --only-dev
+          uv run --frozen --no-sync pip-audit -r "${RUNNER_TEMP}/requirements.txt" --require-hashes --disable-pip \
+            --progress-spinner off -f json -o "${RUNNER_TEMP}/pip-audit.json" || true
+          python ../.github/scripts/audit_gate.py pip "${RUNNER_TEMP}/pip-audit.json"
+      - name: Licences (runtime packages only)
+        run: |
+          uv sync --frozen --no-dev
+          uv run --frozen --no-sync python ../.github/scripts/check_licenses.py python
+
+  node-deps:
+    name: Dashboard dependencies (pnpm audit, licences)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (production closure)
+        run: |
+          pnpm audit --prod --json > "${RUNNER_TEMP}/pnpm-audit.json" || true
+          python ../.github/scripts/audit_gate.py pnpm "${RUNNER_TEMP}/pnpm-audit.json"
+      - name: Licences (production closure)
+        run: |
+          pnpm licenses list --prod --json > "${RUNNER_TEMP}/licenses.json"
+          python ../.github/scripts/check_licenses.py npm "${RUNNER_TEMP}/licenses.json"
+
+  images:
+    name: Image vulnerabilities (Trivy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: backend, context: backend }
+          - { name: frontend, context: frontend }
+          - { name: backup, context: deploy/backup }
+    env:
+      # Run from its image, pinned by digest -- never trivy-action. In March 2026
+      # trivy-action's tags and a Trivy release were hijacked to steal CI
+      # credentials (GHSA-69fq-xp46-6x23); images referenced by digest were the
+      # one way of using it that was never affected.
+      TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image.context }}
+          load: true
+          tags: brahmastra-${{ matrix.image.name }}:scan
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+      - name: Ignore file has a reason and an expiry for every entry
+        run: python .github/scripts/audit_gate.py trivyignore .trivyignore.yaml
+      - name: Trivy (HIGH/CRITICAL with a fix)
+        env:
+          IMAGE: brahmastra-${{ matrix.image.name }}:scan
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/.trivyignore.yaml:/ignore.yaml:ro" \
+            "${TRIVY_IMAGE}" image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+            --ignorefile /ignore.yaml --exit-code 1 --no-progress "${IMAGE}"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: /language:${{ matrix.language }}

@@ -41,7 +41,7 @@ import hmac
 import os
 import time
 
-from fastapi import Request, status
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -50,7 +50,7 @@ from starlette.concurrency import run_in_threadpool
 # reachable by someone who is not logged in yet.
 # /metrics has no token because the scraper sits on the internal network; the
 # edge blocks it and the endpoint refuses proxied requests (main.metrics_endpoint).
-_OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/metrics", "/auth/login",
+_OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/livez", "/readyz", "/metrics", "/auth/login",
                          "/auth/status", "/auth/setup"})
 
 # Routes that act on accounts rather than on a workspace's data.

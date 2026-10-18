@@ -25,17 +25,17 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self,*a): pass
 http.server.HTTPServer(("0.0.0.0",int(os.environ["PORT"])),H).serve_forever()'
 docker run -d --name "${net}-backend" --network "${net}" --network-alias backend \
-  -e NAME=backend -e PORT=8001 python:3.12-alpine python -c "${stub}" >/dev/null
+  -e NAME=backend -e PORT=8001 python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4 python -c "${stub}" >/dev/null
 docker run -d --name "${net}-frontend" --network "${net}" --network-alias frontend \
-  -e NAME=frontend -e PORT=3000 python:3.12-alpine python -c "${stub}" >/dev/null
+  -e NAME=frontend -e PORT=3000 python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4 python -c "${stub}" >/dev/null
 docker run -d --name "${net}-caddy" --network "${net}" -e DOMAIN=localhost -e CADDY_TLS=internal \
-  -v "$(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8.4-alpine >/dev/null
+  -v "$(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8.4-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17 >/dev/null
 sleep 3
 
 fail=0
 check() {   # path, expected status, expected body prefix ("" = not proxied)
   local path="$1" want_status="$2" want_body="$3" got status body
-  got="$(docker run --rm --network "${net}" curlimages/curl:8.10.1 -sk -w '\n%{http_code}' \
+  got="$(docker run --rm --network "${net}" curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b -sk -w '\n%{http_code}' \
          --resolve "localhost:443:$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${net}-caddy")" \
          "https://localhost${path}")"
   status="${got##*$'\n'}"; body="${got%$'\n'*}"

@@ -45,7 +45,7 @@
 <p align="center">Run the stack, connect your assistant over MCP, and it starts remembering.</p>
 
 ```sh
-git clone https://github.com/ShaanKapoor10/vaultgraph-qy.git && cd vaultgraph-qy
+git clone https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph.git && cd vaultgraph-qy
 echo "GROQ_API_KEY=your-groq-key"     > .env
 echo "BRAHMASTRA_ALLOW_ANONYMOUS=1"    >> .env   # local use only
 docker compose up -d --build        # dashboard on :3000, API on :8001

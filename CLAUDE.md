@@ -131,6 +131,12 @@ failure each defence came from, and where to take this next.
   `deploy/tests/edge-test.sh`.
 - **Startup refuses unsafe production config** (`preflight.py`, exit 78).
 - **Accounts and roles:** `accounts.py`, `auth.py`; remote MCP is admin-only.
+- **CI and releases** (`.github/`, CONTRIBUTING.md): the only required check is
+  `ci-success`. Python installs come from `backend/uv.lock` (`uv sync --frozen`,
+  hash-checked; torch only from the CPU index). A `v*` tag on main makes signed
+  GHCR images plus a signed `release.env`; `deploy/upgrade.sh` installs ONLY what
+  verifies against the identity pinned in `deploy/lib.sh`. Never use
+  trivy-action (hijacked March 2026); Trivy runs from a digest-pinned image.
 
 ## What is left to build
 

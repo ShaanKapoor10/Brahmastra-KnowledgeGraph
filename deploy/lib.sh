@@ -84,3 +84,147 @@ wait_healthy() {
 }
 
 current_version() { env_get BRAHMASTRA_VERSION; }
+
+# ---- signed releases ---------------------------------------------------------------
+# A release is installed from images the release workflow built and signed, not
+# from whatever this server builds. Trust is anchored HERE, in the checkout --
+# never in the env file or anything downloaded: the repository, the workflow
+# file and the tag the signing certificate must name, and the OIDC issuer that
+# vouched for it. A fork that publishes its own releases changes RELEASE_REPO.
+RELEASE_REPO="ShaanKapoor10/Brahmastra-KnowledgeGraph"
+RELEASE_WORKFLOW=".github/workflows/release.yml"
+OIDC_ISSUER="https://token.actions.githubusercontent.com"
+COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v3.0.6@sha256:de9c65609e6bde17e6b48de485ee788407c9502fa08b8f4459f595b21f56cd00"
+RELEASE_DIR="${DEPLOY_DIR}/releases"              # verified manifests + last-known-good
+IMAGE_KEYS=(BACKEND_IMAGE FRONTEND_IMAGE BACKUP_IMAGE)
+
+# "registry" (signed images; the default) or "source" (build on this server).
+release_source() { local s; s="$(env_get RELEASE_SOURCE)"; printf '%s' "${s:-registry}"; }
+
+release_identity() { printf 'https://github.com/%s/%s@refs/tags/%s' "${RELEASE_REPO}" "${RELEASE_WORKFLOW}" "$1"; }
+
+# A throwaway Docker config holding only the GHCR pull token, so neither cosign
+# nor the pulls touch (or leave anything in) the host's own Docker login.
+_registry_auth_dir() {
+  local dir user token
+  dir="$(mktemp -d)"
+  token="$(env_get GHCR_PULL_TOKEN)"
+  user="$(env_get GHCR_PULL_USER)"
+  if [ -n "${token}" ]; then
+    printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' \
+      "$(printf '%s:%s' "${user:-token}" "${token}" | base64 | tr -d '\n')" > "${dir}/config.json"
+  else
+    printf '{}\n' > "${dir}/config.json"
+  fi
+  # cosign runs as a non-root user; the parent mktemp directory stays 700.
+  chmod 755 "${dir}"; chmod 644 "${dir}/config.json"
+  printf '%s' "${dir}"
+}
+
+_cosign() {   # auth dir, work dir, cosign args...
+  local auth="$1" work="$2"; shift 2
+  docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp -e TUF_ROOT=/tmp/sigstore \
+    -e DOCKER_CONFIG=/auth -v "${auth}:/auth:ro" -v "${work}:/work:ro" \
+    "${COSIGN_IMAGE}" "$@"
+}
+
+# Download, verify and validate the release manifest for a version, then
+# verify and pull every image it names. On success the manifest is kept at
+# ${RELEASE_DIR}/v<version>/release.env. Nothing is changed on failure.
+prepare_release() {
+  local version="$1" tag="v$1" scratch work auth url line key value owner identity
+  owner="$(printf '%s' "${RELEASE_REPO%%/*}" | tr '[:upper:]' '[:lower:]')"
+  identity="$(release_identity "${tag}")"
+  scratch="$(mktemp -d)"; work="${scratch}/work"; mkdir "${work}"; chmod 755 "${work}"
+  auth="$(_registry_auth_dir)"
+  # shellcheck disable=SC2064   # expand now: the trap must remove THESE directories
+  trap "rm -rf '${scratch}' '${auth}'; trap - RETURN" RETURN
+
+  url="https://github.com/${RELEASE_REPO}/releases/download/${tag}"
+  for f in release.env release.env.sigstore.json; do
+    curl -fsSL --proto '=https' --tlsv1.2 -m 60 -o "${work}/${f}" "${url}/${f}" \
+      || { warn "could not download ${f} for ${tag}"; return 1; }
+  done
+  chmod 644 "${work}"/*
+
+  # 1. the manifest was signed by OUR release workflow, for THIS tag.
+  _cosign "${auth}" "${work}" verify-blob --bundle /work/release.env.sigstore.json \
+    --certificate-identity "${identity}" --certificate-oidc-issuer "${OIDC_ISSUER}" \
+    /work/release.env >/dev/null 2>&1 \
+    || { warn "release manifest signature for ${tag} did NOT verify against ${identity}"; return 1; }
+
+  # 2. it says exactly what a manifest may say, and nothing else. It is parsed,
+  #    never sourced: a signed file is still data.
+  local -A seen=()
+  while IFS= read -r line || [ -n "${line}" ]; do
+    [ -n "${line}" ] || continue
+    key="${line%%=*}"; value="${line#*=}"
+    case "${key}" in
+      VERSION)        [ "${value}" = "${version}" ] || { warn "manifest is for ${value}, not ${version}"; return 1; } ;;
+      GIT_COMMIT)     [[ "${value}" =~ ^[0-9a-f]{40}$ ]] || { warn "manifest GIT_COMMIT is malformed"; return 1; } ;;
+      BACKEND_IMAGE|FRONTEND_IMAGE|BACKUP_IMAGE)
+        local svc; svc="$(printf '%s' "${key%_IMAGE}" | tr '[:upper:]' '[:lower:]')"
+        [[ "${value}" =~ ^ghcr\.io/${owner}/brahmastra-${svc}@sha256:[0-9a-f]{64}$ ]] \
+          || { warn "manifest ${key} is not a ghcr.io/${owner} digest reference"; return 1; } ;;
+      *) warn "manifest has an unexpected line (${key})"; return 1 ;;
+    esac
+    seen[${key}]="${value}"
+  done < "${work}/release.env"
+  for key in VERSION GIT_COMMIT "${IMAGE_KEYS[@]}"; do
+    [ -n "${seen[${key}]:-}" ] || { warn "manifest is missing ${key}"; return 1; }
+  done
+
+  # 3. the configuration in this checkout is the one the images were built with.
+  local tag_commit
+  tag_commit="$(git -C "${REPO_DIR}" rev-parse --verify --quiet "${tag}^{commit}" || true)"
+  [ "${tag_commit}" = "${seen[GIT_COMMIT]}" ] \
+    || { warn "tag ${tag} is ${tag_commit:-missing} here but the signed manifest says ${seen[GIT_COMMIT]}"; return 1; }
+
+  # 4. every image, by digest, was signed by the same workflow identity -- all
+  #    of them checked before any is pulled.
+  for key in "${IMAGE_KEYS[@]}"; do
+    _cosign "${auth}" "${work}" verify --certificate-identity "${identity}" \
+      --certificate-oidc-issuer "${OIDC_ISSUER}" "${seen[${key}]}" >/dev/null 2>&1 \
+      || { warn "signature on ${seen[${key}]} did NOT verify"; return 1; }
+  done
+  for key in "${IMAGE_KEYS[@]}"; do
+    docker --config "${auth}" pull --quiet "${seen[${key}]}" >/dev/null \
+      || { warn "could not pull ${seen[${key}]} (is GHCR_PULL_TOKEN set and valid?)"; return 1; }
+  done
+
+  mkdir -p "${RELEASE_DIR}/${tag}"
+  install -m 600 "${work}/release.env" "${RELEASE_DIR}/${tag}/release.env"
+  ok "release ${tag} verified: manifest and $(( ${#IMAGE_KEYS[@]} )) images signed by ${RELEASE_REPO} ${RELEASE_WORKFLOW}"
+}
+
+all_images_present() {
+  local key
+  for key in "${IMAGE_KEYS[@]}"; do
+    docker image inspect "$(manifest_get "$1" "${key}")" >/dev/null 2>&1 || return 1
+  done
+}
+
+manifest_get() { { grep -E "^$2=" "$1" || true; } | tail -n 1 | cut -d= -f2-; }
+
+# Point the install at the images a manifest names (or, with no manifest, back
+# to images built locally for BRAHMASTRA_VERSION).
+use_images_from() {
+  local manifest="${1:-}" key
+  for key in "${IMAGE_KEYS[@]}"; do
+    if [ -n "${manifest}" ]; then env_set "${key}" "$(manifest_get "${manifest}" "${key}")"
+    else env_set "${key}" ""; fi
+  done
+}
+
+# After a release is healthy: it becomes last-known-good, and the one it
+# replaced becomes previous-known-good -- what `upgrade.sh --rollback` restores.
+record_known_good() {
+  local manifest="$1"
+  mkdir -p "${RELEASE_DIR}"
+  if [ -f "${RELEASE_DIR}/last-known-good.env" ] \
+     && [ "$(manifest_get "${RELEASE_DIR}/last-known-good.env" VERSION)" != "$(manifest_get "${manifest}" VERSION)" ]; then
+    install -m 600 "${RELEASE_DIR}/last-known-good.env" "${RELEASE_DIR}/previous-known-good.env"
+  fi
+  { cat "${manifest}"; printf 'VERIFIED_HEALTHY_AT=%s\n' "$(date -u +%FT%TZ)"; } > "${RELEASE_DIR}/last-known-good.env"
+  chmod 600 "${RELEASE_DIR}/last-known-good.env"
+}

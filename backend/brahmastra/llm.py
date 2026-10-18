@@ -31,7 +31,6 @@ import re
 import time
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 # Load backend/.env so config is present no matter which entrypoint imports
@@ -753,7 +752,7 @@ def _groq_chat(
     json_schema: dict[str, Any] | None = None,
 ) -> str:
     try:
-        from groq import Groq
+        from groq import Groq  # noqa: F401  (the import IS the check: is the SDK installed?)
     except ImportError as e:
         raise LLMUnavailable(
             "groq package not installed — run: uv pip install groq"

@@ -98,6 +98,7 @@ class CircuitBreaker:
         with self._lock:
             state = self._state_locked()
             if state == "open":
+                assert self._opened_at is not None          # "open" is only reported once it is set
                 left = self.cooldown - (time.monotonic() - self._opened_at)
                 raise GraphUnavailable(f"graph engine unavailable (circuit open, retrying in {left:.0f}s): "
                                        f"{self.last_error}")

@@ -144,3 +144,9 @@ def test_a_postgres_system_of_record_raises_no_warning(monkeypatch, client):
     monkeypatch.setenv("NOTE_BACKEND", "postgres")
     body = client.get("/health/ready").json()
     assert "warnings" not in body
+
+
+def test_kubernetes_style_probe_names_are_the_same_probes(client):
+    assert client.get("/livez").json()["status"] == "ok"
+    assert client.get("/readyz").json()["status"] == "ready"
+

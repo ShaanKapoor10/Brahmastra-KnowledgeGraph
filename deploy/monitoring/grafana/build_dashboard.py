@@ -15,7 +15,7 @@ DS = {"type": "prometheus", "uid": "prometheus"}
 API = 'route!~"/health.*|/metrics|/ask|/pipeline/.*|/ingest/transcripts.*"'
 UPDOWN = [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"},
                                         "1": {"text": "UP", "color": "green"}}}]
-RUNBOOK = "https://github.com/ShaanKapoor10/vaultgraph-qy/blob/product/launch/docs/RUNBOOK.md"
+RUNBOOK = "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph/blob/main/docs/RUNBOOK.md"
 
 panels: list[dict] = []
 y = 0

@@ -335,8 +335,9 @@ def search(query: str, limit: int = 8, store: SessionIndex | None = None) -> lis
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    say = lambda obj: sys.stdout.buffer.write(
-        (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    def say(obj):
+        return sys.stdout.buffer.write(
+            (json.dumps(obj, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
 
     if argv[:1] == ["--index"]:
         say([index_transcript(p) for p in argv[1:]])

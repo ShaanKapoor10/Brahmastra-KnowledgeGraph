@@ -231,7 +231,7 @@ class AccountStore(SidecarStore):
         for ws in workspaces or []:
             self.add_member(uid, ws)
         self.audit(actor, "user.create", email, f"role={role}")
-        return self.get_user(uid)
+        return self._require_user(uid)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         u = self._q("SELECT id, email, name, role, disabled, created_at, last_login_at FROM users WHERE id = ?",
@@ -240,6 +240,13 @@ class AccountStore(SidecarStore):
             u["disabled"] = bool(u["disabled"])
             u["workspaces"] = self.member_workspaces(user_id)
         return u
+
+    def _require_user(self, user_id: str) -> dict[str, Any]:
+        """The user, which the caller has just created, changed or authenticated."""
+        user = self.get_user(user_id)
+        if user is None:
+            raise AccountError("No such user.")
+        return user
 
     def find_user(self, email: str) -> dict[str, Any] | None:
         try:
@@ -251,7 +258,8 @@ class AccountStore(SidecarStore):
 
     def list_users(self) -> list[dict[str, Any]]:
         ids = self._q("SELECT id FROM users ORDER BY created_at", rows=True)
-        return [self.get_user(r["id"]) for r in ids]
+        # A user deleted between the two reads is simply not listed.
+        return [u for r in ids if (u := self.get_user(r["id"])) is not None]
 
     def update_user(self, user_id: str, *, role: str | None = None, disabled: bool | None = None,
                     name: str | None = None, workspaces: list[str] | None = None,
@@ -280,7 +288,7 @@ class AccountStore(SidecarStore):
         self.audit(actor, "user.update", user["email"],
                    ", ".join(f"{k}={v}" for k, v in (("role", role), ("disabled", disabled),
                                                       ("workspaces", workspaces)) if v is not None))
-        return self.get_user(user_id)
+        return self._require_user(user_id)
 
     def delete_user(self, user_id: str, actor: str | None = None) -> None:
         user = self.get_user(user_id)
@@ -368,7 +376,7 @@ class AccountStore(SidecarStore):
                 "VALUES (?, ?, ?, ?, ?, ?)", (_token_hash(token), row["id"], now, now + SESSION_TTL, now,
                                               (user_agent or "")[:200]))
         self._q("UPDATE users SET last_login_at = ? WHERE id = ?", (now, row["id"]))
-        user = self.get_user(row["id"])
+        user = self._require_user(row["id"])
         self.audit(user["email"], "login", user["email"], ip=ip)
         return {"token": token, "expires_at": now + SESSION_TTL, "user": user}
 
@@ -495,15 +503,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("The passwords did not match.")
                 return 1
         if a.cmd == "create-admin":
-            u = s.create_user(a.email, pw, role="admin", name=a.name, actor="cli")
-            print(f"Created admin {u['email']}.")
+            created = s.create_user(a.email, pw, role="admin", name=a.name, actor="cli")
+            print(f"Created admin {created['email']}.")
         else:
-            u = s.find_user(a.email)
-            if not u:
+            target = s.find_user(a.email)
+            if not target:
                 print("No such user.")
                 return 1
-            s.set_password(u["id"], pw, actor="cli")
-            print(f"Password reset for {u['email']}; their sessions were ended.")
+            s.set_password(target["id"], pw, actor="cli")
+            print(f"Password reset for {target['email']}; their sessions were ended.")
         return 0
     except AccountError as e:
         print(e)

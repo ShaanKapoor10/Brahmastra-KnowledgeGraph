@@ -12,7 +12,6 @@ subtlety. Tests call reset_store() to drop the cache.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from brahmastra.stores.base import GraphStore
 from brahmastra.stores.sqlite_store import SQLiteStore

@@ -25,6 +25,11 @@ backend/.env
 !.env.example
 !deploy/.env.production.example
 
+# per-server release state: verified manifests, last-known-good digests, history
+deploy/releases/
+deploy/upgrade-history.log
+deploy/.upgrade.lock/
+
 # vercel
 .vercel
 

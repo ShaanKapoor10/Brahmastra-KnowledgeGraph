@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 # Load .env so GROQ_API_KEY / ANTHROPIC_API_KEY are available when the
 # server is started directly with uvicorn (outside of the MCP process).
@@ -452,3 +451,10 @@ async def _components(detail: dict[str, Any] | None = None) -> dict[str, str]:
             asyncio.get_running_loop().run_in_executor(None, ctx.run, probe), timeout=10)
     except Exception:                            # noqa: BLE001
         return {"notes": "unavailable: timeout", "graph": "unavailable: timeout"}
+
+
+# Kubernetes-style names for the same two probes, so an orchestrator, a load
+# balancer or the release smoke test can use the convention it expects.
+app.add_api_route("/livez", health, methods=["GET"], include_in_schema=False)
+app.add_api_route("/readyz", ready, methods=["GET"], include_in_schema=False)
+

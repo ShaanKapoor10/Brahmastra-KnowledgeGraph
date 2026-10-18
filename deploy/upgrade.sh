@@ -2,16 +2,25 @@
 # Upgrade to a released version, with a backup first and an automatic rollback
 # if the new version does not come up healthy.
 #
-#   ./upgrade.sh 0.3.0          upgrade to the git tag v0.3.0
-#   ./upgrade.sh --rollback     go back to the version before the last upgrade
+#   ./upgrade.sh 0.3.0          upgrade to the release v0.3.0
+#   ./upgrade.sh --rollback     go back to the release before the last upgrade
 #
 # Steps:
 #   1. preflight: one upgrade at a time, clean checkout, the tag exists, valid config
-#   2. backup now -- an upgrade without a fresh backup does not start
-#   3. check out the tag and build images tagged with the new version
-#   4. switch BRAHMASTRA_VERSION and restart; the backend applies its schema
+#   2. obtain the release -- nothing running is touched yet:
+#        RELEASE_SOURCE=registry (default): download the release manifest,
+#          verify its signature against the release workflow's identity
+#          (lib.sh: RELEASE_REPO, RELEASE_WORKFLOW, OIDC_ISSUER), check the tag
+#          is the commit it names, then verify and pull every image BY DIGEST.
+#          An unsigned or mismatched release stops here.
+#        RELEASE_SOURCE=source: build the images from the tag on this server.
+#   3. backup now -- an upgrade without a fresh backup does not start; then
+#      check out the tag (its compose file and configs) and, from source, build
+#   4. switch to the new images and restart; the backend applies its schema
 #      migrations on start (they are additive, see docs/OPERATIONS.md)
-#   5. health check; on failure, put the previous version back and check again
+#   5. health check. Healthy: the release becomes last-known-good. Unhealthy:
+#      put the previous images back -- by the digests recorded as last-known-good
+#      -- and check again
 #
 # Rolling back the CODE is safe without rolling back the DATA because every
 # migration is backward compatible (expand now, contract in a later release):
@@ -37,8 +46,11 @@ notify() {
     -d "{\"text\":\"[$(env_get DOMAIN)] $*\"}" "${url}" >/dev/null 2>&1 || true
 }
 
+mode="$(release_source)"
+case "${mode}" in registry|source) ;; *) die "RELEASE_SOURCE must be registry or source, not ${mode}" ;; esac
 previous="$(current_version)"
 previous_ref="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+last_good="${RELEASE_DIR}/last-known-good.env"
 
 if [ "$1" = "--rollback" ]; then
   [ -f "${HISTORY}" ] || die "no upgrade history to roll back"
@@ -53,33 +65,56 @@ tag="v${target}"
 
 # ---- 1. preflight ------------------------------------------------------------------------
 git -C "${REPO_DIR}" diff --quiet && git -C "${REPO_DIR}" diff --cached --quiet \
-  || die "the checkout has local changes; an upgrade must build exactly the released code"
+  || die "the checkout has local changes; an upgrade must run exactly the released configuration"
 git -C "${REPO_DIR}" fetch --quiet --tags origin || warn "could not fetch tags; using the tags present locally"
 git -C "${REPO_DIR}" rev-parse --verify --quiet "${tag}^{commit}" >/dev/null || die "no release tag ${tag}"
 "${COMPOSE[@]}" config --quiet || die "deploy/docker-compose.prod.yml or .env.production is invalid"
 free_gb=$(df -Pk "${DEPLOY_DIR}" | awk 'NR==2 {printf "%d", $4/1024/1024}')
 [ "${free_gb}" -ge 5 ] || die "only ${free_gb} GB free: an upgrade needs room for new images and a backup"
-ok "preflight passed: ${previous} -> ${target}"
+ok "preflight passed: ${previous} -> ${target} (${mode})"
 
-# ---- 2. backup ---------------------------------------------------------------------------
+# ---- 2. obtain the release ---------------------------------------------------------------
+manifest=""
+prev_good="${RELEASE_DIR}/previous-known-good.env"
+if [ "${mode}" = registry ]; then
+  if [ "$1" = "--rollback" ] && [ -f "${prev_good}" ] && [ "$(manifest_get "${prev_good}" VERSION)" = "${target}" ] \
+     && all_images_present "${prev_good}"; then
+    # Rolling back to digests that were verified and ran healthy here before.
+    manifest="${RELEASE_DIR}/${tag}/release.env"
+    mkdir -p "${RELEASE_DIR}/${tag}"
+    grep -v '^VERIFIED_HEALTHY_AT=' "${prev_good}" > "${manifest}"; chmod 600 "${manifest}"
+    ok "using the recorded previous-known-good digests for ${tag}"
+  else
+    info "verifying release ${tag}"
+    prepare_release "${target}" || die "release ${tag} failed verification; nothing was changed"
+    manifest="${RELEASE_DIR}/${tag}/release.env"
+  fi
+fi
+
+# ---- 3. backup ---------------------------------------------------------------------------
 info "taking a backup before upgrading"
 "${COMPOSE[@]}" run --rm -T backup backup || die "backup failed, upgrade NOT started"
 ok "backup taken"
 
-# ---- 3. build ------------------------------------------------------------------------------
+# The compose file, Caddyfile and alert rules are part of the release too.
 git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${tag}"
-info "building ${target}"
-if ! BRAHMASTRA_VERSION="${target}" compose_build --pull --quiet; then
-  git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${previous_ref}"
-  die "build failed; still running ${previous}, nothing was changed"
+if [ "${mode}" = source ]; then
+  info "building ${target}"
+  if ! BACKEND_IMAGE="" FRONTEND_IMAGE="" BACKUP_IMAGE="" BRAHMASTRA_VERSION="${target}" \
+       compose_build --pull --quiet; then
+    git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${previous_ref}"
+    die "build failed; still running ${previous}, nothing was changed"
+  fi
 fi
 
 # ---- 4 + 5. switch, check, roll back on failure ----------------------------------------
+use_images_from "${manifest}"
 env_set BRAHMASTRA_VERSION "${target}"
 "${COMPOSE[@]}" up -d --remove-orphans
 info "waiting for ${target} to become healthy"
 if wait_healthy 300; then
   printf '%s %s upgraded %s -> %s\n' "$(date -u +%FT%TZ)" "$(whoami)" "${previous}" "${target}" >> "${HISTORY}"
+  [ -n "${manifest}" ] && record_known_good "${manifest}"
   ok "${BOLD}now running ${target}${OFF}"
   notify "Upgraded Brahmastra ${previous} -> ${target}"
   exit 0
@@ -89,8 +124,15 @@ warn "${target} did not become healthy; rolling back to ${previous}"
 "${COMPOSE[@]}" logs --tail 50 backend >&2 || true
 env_set BRAHMASTRA_VERSION "${previous}"
 git -C "${REPO_DIR}" -c advice.detachedHead=false checkout --quiet "${previous_ref}"
-if ! docker image inspect "brahmastra-backend:${previous}" >/dev/null 2>&1; then
-  compose_build --quiet
+if [ -f "${last_good}" ] && [ "$(manifest_get "${last_good}" VERSION)" = "${previous}" ]; then
+  # The digests that were verified AND ran healthy. Images are addressed by
+  # content, so these are the exact bytes that last worked.
+  use_images_from "${last_good}"
+else
+  use_images_from ""
+  if ! docker image inspect "brahmastra-backend:${previous}" >/dev/null 2>&1; then
+    compose_build --quiet
+  fi
 fi
 "${COMPOSE[@]}" up -d --remove-orphans
 if wait_healthy 300; then

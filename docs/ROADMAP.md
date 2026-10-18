@@ -436,6 +436,29 @@ failed, run the pipeline, reprocess a meeting, distil the checkpoint queue.
 container and the scheduler container each keep their own pool, so the page shows
 the backend's view. A shared rest table would fix it; nothing has needed it yet.
 
+### 14. Dashboard: 13 React hook warnings — OPEN (found 2026-10-19)
+
+ESLint was first wired into CI on 2026-10-19 and found 13 places where React's
+newer hook rules object: `react-hooks/set-state-in-effect` (state set inside an
+effect, which costs an extra render and can loop) and `react-hooks/refs` (a ref
+read during render). They are set to **warn** in `frontend/eslint.config.mjs`
+rather than fixed in that change, because each one is a behaviour change in a
+component, not a lint fix, and deserves its own test in the browser. Fix them
+component by component, then set both rules back to `error`, so CI keeps them
+from coming back.
+
+### 15. Supply chain: what Phase 4 left open — 2026-10-19
+
+- **The database server image is outside our scan.** Trivy scans the three
+  images we build. Postgres, Neo4j, Caddy and the monitoring images run as
+  published, pinned by digest; Dependabot moves the digests weekly. A nightly
+  Trivy pass over those digests would surface a stale one between updates.
+- **Requirements of `pip-audit`'s own environment** come from the dev group of
+  `uv.lock`; that environment is not what ships, so it is not audited.
+- **The dev compose file (`docker-compose.yml`)** still uses tags, not digests.
+  It is for laptops, never for deployment, so it was left out; pin it if anyone
+  starts deploying from it.
+
 ## Deliberately not doing
 
 Recorded so they are not re-proposed. Each was measured.
