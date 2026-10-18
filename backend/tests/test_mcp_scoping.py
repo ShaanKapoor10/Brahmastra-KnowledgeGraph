@@ -152,9 +152,10 @@ def test_remote_mcp_accepts_this_installs_own_host_and_nothing_else():
 
     hosts, origins = allowed_hosts_and_origins(
         {"PUBLIC_URL": "https://kb.example.com", "DOMAIN": "kb.example.com"})
-    assert "kb.example.com" in hosts and "kb.example.com:*" in hosts
-    assert "localhost" in hosts
-    assert "evil.example.net" not in hosts
+    # Exactly these, and nothing else: the install's own name and localhost,
+    # each on any port.
+    names = {"kb.example.com", "localhost", "127.0.0.1", "[::1]"}
+    assert set(hosts) == names | {f"{n}:*" for n in names}
     assert origins == ["https://kb.example.com"]
 
     hosts, _ = allowed_hosts_and_origins({"MCP_ALLOWED_HOSTS": "mcp.internal, other.host"})
