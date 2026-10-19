@@ -253,3 +253,64 @@ def test_the_usage_tab_carries_no_text():
     schema = usage._Counters.SCHEMA
     ledger = schema[schema.index("usage_ledger"):schema.index("note_authors")]
     assert not any(word in ledger for word in ("content", "question", "answer", "prompt", "title"))
+
+
+# ---------------------------------------------------------------- calls that bypass llm.chat
+
+def test_groq_extraction_books_to_the_author_and_respects_the_budget(booked, monkeypatch):
+    """Extraction talks to Groq directly (its 413 handling is bespoke), so it
+    must meter itself: found by the phase C hands-on check, where a note read
+    by the pipeline booked nothing at all."""
+    pytest.importorskip("groq")
+    import types as pytypes
+
+    import brahmastra.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    from brahmastra import extraction, groq_pool, llm
+    from brahmastra.accounts import unbind_identity
+
+    class Pool:
+        def call(self, fn):
+            usage_ = pytypes.SimpleNamespace(prompt_tokens=700, completion_tokens=90,
+                                             completion_tokens_details=pytypes.SimpleNamespace(reasoning_tokens=40))
+            msg = pytypes.SimpleNamespace(content='{"triples": []}')
+            client = pytypes.SimpleNamespace(chat=pytypes.SimpleNamespace(completions=pytypes.SimpleNamespace(
+                create=lambda **kw: pytypes.SimpleNamespace(choices=[pytypes.SimpleNamespace(message=msg)],
+                                                            usage=usage_))))
+            return fn(client)
+
+    monkeypatch.setattr(groq_pool, "pool", lambda: Pool())
+    monkeypatch.setattr(llm, "resolve_provider", lambda: "groq")
+    monkeypatch.setenv("LLM_MEMO", "0")
+
+    token = _as("u-dev")
+    try:
+        db_mod.upsert_note("n3", "t", "Dev wrote this one.")
+    finally:
+        unbind_identity(token)
+    extraction.extract_note(db_mod.get_note("n3"))
+    [row] = _ledger()
+    assert (row["who"], row["purpose"], row["provider"]) == ("u-dev", "note", "groq")
+    assert (row["input"], row["output"], row["thoughts"]) == (700, 50, 40)
+
+    usage.set_company_budget(day=1, month=None)                 # now spent
+    db_mod.upsert_note("n4", "t", "Another note.")
+    result = extraction.extract_note(db_mod.get_note("n4"))
+    assert "token budget" in (result["error"] or "")
+    assert len(_ledger()) == 1                                  # nothing new was billed
+
+
+def test_no_code_calls_a_provider_without_metering_it():
+    """Every direct provider call outside llm.py must sit in a module that also
+    checks the budget and books the tokens -- or it is invisible to plans."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent / "brahmastra"
+    calls = ("completions.create(", "messages.create(", "generate_content(")
+    for path in root.rglob("*.py"):
+        if path.name == "llm.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(c in text for c in calls):
+            assert "_check_budget" in text and "_record_" in text, \
+                f"{path.relative_to(root)} calls a provider directly without budget check and token booking"

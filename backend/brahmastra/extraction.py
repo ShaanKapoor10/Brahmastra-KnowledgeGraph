@@ -586,6 +586,15 @@ def _extract_with_groq(title: str, content: str,
     if cached is not None:
         return _parse_llm_response(cached)
 
+    # This path calls Groq directly, not through llm.chat, so it must do what
+    # llm.chat does for every other call: refuse when the token budget is
+    # spent (AFTER the cache, so a free cached reply still works), and book
+    # what Groq bills. It did neither until phase C of plans found it: note
+    # extraction, the largest consumer, was invisible to budgets and the ledger.
+    from brahmastra.llm import _check_budget, _record_openai_usage
+
+    _check_budget()
+
     kwargs: dict[str, Any] = dict(
         # NOT a literal: llm.py owns which model runs, or this call site drifts
         # and keeps hitting a retired one after llm.py has been fixed.
@@ -644,6 +653,7 @@ def _extract_with_groq(title: str, content: str,
                 if kwargs["max_tokens"] >= MIN_OUTPUT_TOKENS:
                     continue
             raise
+        _record_openai_usage("groq", getattr(response, "usage", None))
         reply = response.choices[0].message.content or ""
         _memo_save(user_message, model, reply, typed)
         return _parse_llm_response(reply)
@@ -667,12 +677,19 @@ def _extract_with_anthropic(title: str, content: str, api_key: str) -> list[dict
     if cached is not None:
         return _parse_llm_response(cached)
 
+    from brahmastra.llm import _check_budget, _record_tokens
+
+    _check_budget()                     # see _extract_with_groq
     message = client.messages.create(
         model=model,
         max_tokens=EXTRACTION_MAX_TOKENS,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
+    usage = getattr(message, "usage", None)
+    if usage is not None:
+        _record_tokens("anthropic", getattr(usage, "input_tokens", 0) or 0,
+                       getattr(usage, "output_tokens", 0) or 0, 0)
     reply = message.content[0].text
     _memo_save(user_message, model, reply)
     return _parse_llm_response(reply)
