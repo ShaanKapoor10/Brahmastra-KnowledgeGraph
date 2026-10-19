@@ -159,7 +159,8 @@ def _denied(detail: str) -> str:
 
 
 def _scoped(need: str):
-    """Require `need` (viewer | member | admin) and membership of the workspace."""
+    """Require `need` (viewer | member | admin), the plan features the tool needs
+    (plans.TOOL_FEATURES), and membership of the workspace."""
     import functools
 
     def decorate(fn):
@@ -184,6 +185,13 @@ def _scoped(need: str):
                 return _denied(problem[1])
             if not identity.at_least(need):
                 return _denied(f"This tool needs the {need} role; you are a {identity.role}.")
+            # Checked per call, not only on connecting: a plan changed mid-session
+            # applies at the next call, as a revoked token does.
+            from brahmastra.plans import TOOL_FEATURES, refusal
+
+            for feature in ("mcp", TOOL_FEATURES.get(fn.__name__)):
+                if feature and not identity.has(feature):
+                    return _denied(refusal(feature))
             requested = (request.headers.get(WORKSPACE_HEADER)
                          or request.query_params.get("workspace") or "").strip()
             try:
@@ -500,6 +508,15 @@ def brahmastra_add_note(
     as session checkpoints, which belong in the graph, not in Notion.
     """
     db.init_db()
+    from brahmastra import usage
+    from brahmastra.accounts import current_identity
+
+    # Counted as for the dashboard: an assistant adding notes in a loop meets
+    # the same daily limit a person would.
+    try:
+        usage.charge_note(current_identity(), content)
+    except usage.LimitReached as e:
+        return _denied(str(e))
     nid = note_id or str(uuid.uuid4())[:8]
     db.upsert_note(nid, title, content, mark_pending=True,
                    publish=publish or None, source="mcp")

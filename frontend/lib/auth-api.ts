@@ -13,6 +13,10 @@ export interface AccountUser {
   created_at: number
   last_login_at: number | null
   workspaces: string[]
+  /** Plan id (lib/plans.ts). */
+  plan: string
+  /** When a time-limited plan ends (seconds since the epoch), or null. */
+  plan_expires_at?: number | null
 }
 
 export interface ApiToken {

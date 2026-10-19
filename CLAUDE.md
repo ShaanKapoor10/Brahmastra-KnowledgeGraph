@@ -131,11 +131,43 @@ failure each defence came from, and where to take this next.
   `deploy/tests/edge-test.sh`.
 - **Startup refuses unsafe production config** (`preflight.py`, exit 78).
 - **Accounts and roles:** `accounts.py`, `auth.py`; dashboard **Team** (admins) and
-  **Account** tabs. Remote MCP is open to every role: each tool re-identifies the
+  **Account** tabs. Remote MCP is open to every role and every plan: each tool re-identifies the
   caller from its own HTTP request and checks role + workspace (`mcp_server._scoped`),
   because the middleware's contextvars are not guaranteed to reach MCP tools. The SDK's
   Host check is configured from PUBLIC_URL/DOMAIN (`MCP_ALLOWED_HOSTS` adds more).
   Rate limits that cost money are shared across workers (`rate_windows` table).
+- **Plans** (`plans.py`, branch `feat/plans`): a second check AFTER the role, never
+  instead of it: a plan only narrows what a role allows. Each person has one plan
+  (`user_plans`); plans are rows, seeded once (`AccountStore.ensure_plans`), and
+  everyone starts on their role's plan (viewer→Reader, member→Contributor,
+  admin→Unlimited), so introducing plans took nobody's access away. Every route is
+  either mapped to a feature (`route_feature`) or listed as deliberately exempt in
+  `tests/test_plans.py`, so a new route cannot slip past. MCP checks per tool
+  (`TOOL_FEATURES`).
+- **Usage and tokens** (`usage.py`): units (questions, notes, words, meeting
+  minutes) are charged where they ENTER (middleware for /ask, POST /notes, MCP
+  add_note, ingest routes), atomically, per day and month in `TZ`. Every billed
+  token goes through `llm._record_tokens` to `usage.record_tokens`, booked to whoever
+  the work is for: the request's person, a note's AUTHOR (`note_authors`, set in
+  `db.upsert_note`) even in a background run, a meeting's submitter, or `ws:<id>` for
+  shared graph work (`usage.charging`). `llm._check_budget` runs before EVERY call and
+  raises `BudgetExhausted` (a kind of `LLMQuotaExhausted`, never falls back to another
+  provider), so notes stay pending and are retried. Company budget: admin Usage tab,
+  capped by `TOKEN_BUDGET_DAY/_MONTH`. Token counts are provider-billed, not estimates.
+  Any provider call outside `llm.py` must check the budget and book its tokens itself
+  (extraction's Groq/Anthropic paths do); `tests/test_tokens.py` scans for violations.
+- **Upgrades** (`plan_requests`, `plan_grants`): people ask under `/auth/me/requests`,
+  admins decide under `/auth/requests`. Every limit is read through
+  `AccountStore.effective_limits` (plan + this day's/month's top-ups), so a top-up
+  cannot be missed. A time-limited plan reverts on the first lookup after its end
+  (`plan_id_for`, audited `plan.expire`). Nobody decides their own request or changes
+  their own plan while another admin exists.
+- **`uv sync` uninstalls the editable `brahmastra` package** from `backend/.venv`,
+  and the Brahmastra plugin's MCP server then fails with "No module named
+  'brahmastra'" (Claude Code launches it from the workspace root). After any sync:
+  `uv pip install --python .venv/Scripts/python.exe --no-deps -e .`. And never sync
+  while MCP servers run: they hold numpy's DLLs, and a half-finished sync broke the
+  venv once. Use `uv add --no-sync`.
 - **CI and releases** (`.github/`, CONTRIBUTING.md): the only required check is
   `ci-success`. Python installs come from `backend/uv.lock` (`uv sync --frozen`,
   hash-checked; torch only from the CPU index). A `v*` tag on main makes signed

@@ -130,7 +130,18 @@ OLLAMA_HOST = _env("OLLAMA_HOST", "http://localhost:11434")
 GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+# The smallest stable Gemini whose thinking can be pinned to minimal. Was
+# gemini-2.5-flash, which Google now serves only to accounts that used it
+# before -- a new company key could not be relied on to get it. Thinking tokens
+# are billed as output, so GEMINI_THINKING_LEVEL (default "minimal") matters as
+# much as the model. Override per deployment with GEMINI_MODEL.
+GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# OpenCode Zen: an OpenAI-compatible gateway. This model is FREE "for a limited
+# time" and its provider is listed as zero-retention, no training -- unlike
+# several other free Zen models, whose data may be used to improve them. Check
+# opencode.ai/docs/zen before choosing another free model for real data.
+OPENCODE_DEFAULT_MODEL = "deepseek-v4.1-flash-free"
+OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/inference/openai/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +197,10 @@ _REGISTRY: tuple[Provider, ...] = (
              GEMINI_DEFAULT_MODEL),
     Provider("anthropic", "ANTHROPIC_API_KEY", "anthropic", "ANTHROPIC_MODEL",
              ANTHROPIC_DEFAULT_MODEL),
+    # Last of the cloud providers, so a key appearing in .env never makes it
+    # the fallback ahead of one already in use; LLM_PROVIDER=opencode selects it.
+    Provider("opencode", "OPENCODE_API_KEY", "openai", "OPENCODE_MODEL",
+             OPENCODE_DEFAULT_MODEL),
     Provider("ollama", "", "", "OLLAMA_MODEL", OLLAMA_MODEL),
 )
 
@@ -348,8 +363,32 @@ def _is_quota_exhausted(exc: Exception) -> bool:
         return False
     return any(
         marker in text
-        for marker in ("per day", "tokens per day", "(tpd)", "requests per day", "rpd")
+        for marker in ("per day", "tokens per day", "(tpd)", "requests per day", "rpd", "token budget")
     )
+
+
+class BudgetExhausted(LLMQuotaExhausted):
+    """
+    The company's or a person's TOKEN BUDGET is spent (usage.budget_problem).
+
+    A kind of LLMQuotaExhausted so every caller's handling for a spent quota
+    applies as it is -- notes stay pending and are retried, a run stops
+    cleanly -- and worded with "429 ... token budget" so code that classifies
+    the message (extraction._is_quota_error) agrees. Unlike a provider's quota
+    it never falls back to another provider: the budget is the company's.
+    """
+
+
+def _check_budget() -> None:
+    """Refuse an AI call before it starts when the budget it would use is spent."""
+    try:
+        from brahmastra import usage
+
+        problem = usage.budget_problem()
+    except Exception:                                       # noqa: BLE001
+        return          # the meter is unreachable: never let it take AI down
+    if problem:
+        raise BudgetExhausted(f"429 token budget spent: {problem}")
 
 
 def _is_model_missing(exc: Exception) -> bool:
@@ -537,12 +576,15 @@ def _chat_unmeasured(
     # transient 429, which the retry loop already handles, and not on a bad
     # request, which would fail identically everywhere. `provider=` pins a
     # choice explicitly, so an explicit pin is never second-guessed.
+    _check_budget()
     if provider is None:
         try:
             return _dispatch(name, system, user, json_mode=json_mode,
                              json_schema=json_schema,
                              temperature=temperature, max_tokens=max_tokens,
                              num_ctx=num_ctx, timeout=timeout, retries=retries)
+        except BudgetExhausted:
+            raise
         except LLMQuotaExhausted:
             fallback = _next_usable_provider(name)
             if fallback is None:
@@ -590,10 +632,11 @@ def _dispatch(
             system, user, json_mode=json_mode, json_schema=json_schema,
             temperature=temperature, max_tokens=max_tokens, retries=retries,
         )
-    if name == "openai":
+    if name == "openai" or name == "opencode":
         return _openai_chat(
             system, user, json_mode=json_mode, json_schema=json_schema,
             temperature=temperature, max_tokens=max_tokens, retries=retries,
+            provider=name,
         )
     if name == "gemini":
         return _gemini_chat(
@@ -616,9 +659,14 @@ def _openai_chat(
     temperature: float,
     max_tokens: int,
     retries: int,
+    provider: str = "openai",
 ) -> str:
     """
     OpenAI, through the same contract every other provider here honours.
+
+    Also OpenCode Zen (provider="opencode"): the same wire format at another
+    address, with its own key and model. Only those three differ, so it shares
+    this function rather than copying it.
 
     Same shape as _groq_chat on purpose -- Groq speaks the OpenAI wire format,
     so the only real differences are the client and the token parameter name.
@@ -633,8 +681,13 @@ def _openai_chat(
             "openai package not installed -- run: uv pip install openai"
         ) from e
 
-    client = OpenAI(api_key=_env("OPENAI_API_KEY", ""))
-    model = openai_model()
+    spec = provider_spec(provider)
+    base_url = None
+    if provider == "opencode":
+        base_url = _env("OPENCODE_BASE_URL", "") or OPENCODE_DEFAULT_BASE_URL
+    client = OpenAI(api_key=_env(spec.key_env, ""), base_url=base_url)
+    model = model_for(provider)
+    label = "OpenCode" if provider == "opencode" else "OpenAI"
     kwargs: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
@@ -657,20 +710,70 @@ def _openai_chat(
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(**kwargs)
+            _record_openai_usage(provider, getattr(resp, "usage", None))
             return resp.choices[0].message.content or ""
         except Exception as e:
             last_err = e
             if _is_quota_exhausted(e):
-                raise LLMQuotaExhausted(f"OpenAI quota exhausted: {e}") from e
+                raise LLMQuotaExhausted(f"{label} quota exhausted: {e}") from e
             if _is_model_missing(e):
                 raise LLMModelUnavailable(
-                    f"OpenAI model {model!r} is not available on this account. "
-                    f"Set OPENAI_MODEL in backend/.env to a current one. "
-                    f"Default is {OPENAI_DEFAULT_MODEL!r}. Original error: {e}"
+                    f"{label} model {model!r} is not available on this account. "
+                    f"Set {spec.model_env} in backend/.env to a current one. "
+                    f"Default is {spec.default_model!r}. Original error: {e}"
                 ) from e
             time.sleep(retry_delay(e, attempt))
 
-    raise LLMUnavailable(f"OpenAI request failed after {retries} attempts: {last_err}")
+    raise LLMUnavailable(f"{label} request failed after {retries} attempts: {last_err}")
+
+
+def _count_tokens(provider: str, usage: Any) -> None:
+    """Record the tokens a provider says it billed, thoughts included.
+
+    LLM_CHARS only estimates (chars / 4) and cannot see thinking at all, which
+    is billed as output. Never raises: a missing field is not worth a failed call.
+    """
+    if usage is None:
+        return
+    _record_tokens(provider,
+                   getattr(usage, "prompt_token_count", 0) or 0,
+                   getattr(usage, "candidates_token_count", 0) or 0,
+                   getattr(usage, "thoughts_token_count", 0) or 0)
+
+
+def _record_openai_usage(provider: str, usage: Any) -> None:
+    """Tokens from an OpenAI-shaped `usage` (OpenAI, OpenCode, Groq).
+
+    OpenAI counts reasoning INSIDE completion_tokens; Gemini does not. Split
+    out here, so "output" means the same thing for every provider.
+    """
+    if usage is None:
+        return
+    completion = getattr(usage, "completion_tokens", 0) or 0
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", 0) or 0
+    _record_tokens(provider, getattr(usage, "prompt_tokens", 0) or 0, completion - reasoning, reasoning)
+
+
+def _record_tokens(provider: str, input_tokens: int, output_tokens: int,
+                   thought_tokens: int) -> None:
+    """One place every provider reports billed tokens to: the metrics, and the
+    usage ledger that budgets and the admin Usage tab read. Never raises."""
+    try:
+        from brahmastra import metrics
+
+        for kind, count in (("input", input_tokens), ("output", output_tokens),
+                            ("thoughts", thought_tokens)):
+            if count:
+                metrics.LLM_TOKENS.labels(provider, kind).inc(count)
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        from brahmastra import usage
+
+        usage.record_tokens(provider, model_for(provider), input_tokens, output_tokens, thought_tokens)
+    except Exception:                                       # noqa: BLE001
+        pass
 
 
 def _gemini_chat(
@@ -716,6 +819,18 @@ def _gemini_chat(
         config["response_schema"] = json_schema
     elif json_mode:
         config["response_mime_type"] = "application/json"
+    # Thought tokens are billed as output, and a model that thinks at "medium"
+    # by default multiplies the cost of every call. Empty or "off" sends no
+    # setting, for a model that rejects the level (3.8 Flash has no "minimal").
+    thinking = _env("GEMINI_THINKING_LEVEL", "minimal").strip().lower()
+    if thinking and thinking != "off":
+        try:
+            level = types.ThinkingLevel(thinking.upper())
+        except ValueError as e:
+            raise LLMUnavailable(
+                f"GEMINI_THINKING_LEVEL={thinking!r} is not one of minimal, low, "
+                f"medium, high or off") from e
+        config["thinking_config"] = types.ThinkingConfig(thinking_level=level)
 
     last_err: Exception | None = None
     for attempt in range(retries):
@@ -725,6 +840,7 @@ def _gemini_chat(
                 contents=user,
                 config=types.GenerateContentConfig(**config),
             )
+            _count_tokens("gemini", getattr(resp, "usage_metadata", None))
             return resp.text or ""
         except Exception as e:
             last_err = e
@@ -788,6 +904,7 @@ def _groq_chat(
     try:
         resp = groq_pool.pool().call(
             lambda client: client.chat.completions.create(**kwargs))
+        _record_openai_usage("groq", getattr(resp, "usage", None))
         return resp.choices[0].message.content or ""
     except LLMUnavailable:
         raise
@@ -826,6 +943,10 @@ def _anthropic_chat(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        _record_tokens("anthropic", getattr(usage, "input_tokens", 0) or 0,
+                       getattr(usage, "output_tokens", 0) or 0, 0)
     return "".join(block.text for block in resp.content if block.type == "text")
 
 

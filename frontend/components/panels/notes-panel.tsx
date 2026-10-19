@@ -7,11 +7,14 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { RELATION_LABEL } from "@/lib/viz"
 import { FileText, Loader2, Plus, Search, X } from "lucide-react"
+import { PlanLocked } from "@/components/plan-lock"
 
 interface Props {
   notes: Note[]
   triples: RawTriple[]
   onAddNote: (note: Note, triples: RawTriple[]) => void
+  /** False when the person's plan has no "Add notes": the form becomes a notice. */
+  canAdd?: boolean
   workspace?: string
   backendAvailable?: boolean
 }
@@ -25,7 +28,7 @@ interface Hit {
   extraction_status?: string | null
 }
 
-export function NotesPanel({ notes, triples, onAddNote, workspace = "default", backendAvailable = false }: Props) {
+export function NotesPanel({ notes, triples, onAddNote, workspace = "default", backendAvailable = false, canAdd = true }: Props) {
   const [title, setTitle] = useState("")
   const [content, setContent] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +122,7 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
 
   return (
     <div className="flex flex-col gap-5">
+      {!canAdd ? <PlanLocked feature="add_notes" /> : (
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="mb-3 flex items-center gap-2">
           <Plus className="h-4 w-4 text-primary" />
@@ -147,6 +151,7 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
           {pending ? "Extracting…" : "Extract triples"}
         </Button>
       </div>
+      )}
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 focus-within:border-primary/60">

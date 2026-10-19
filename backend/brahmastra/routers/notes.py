@@ -8,7 +8,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from brahmastra import db
+from brahmastra import db, usage
+from brahmastra.accounts import current_identity
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -58,16 +59,23 @@ async def create_note(body: NoteCreate) -> dict[str, Any]:
     # Honor the caller's extraction_status if provided; default to pending
     # so the pipeline picks it up for LLM extraction.
     mark_pending = body.extraction_status != "done"
-    db.upsert_note(
-        id=body.id,
-        title=body.title,
-        content=body.content,
-        last_edited=body.last_edited,
-        mark_pending=mark_pending,
-        # The REST route is what the Next.js dashboard posts to. A future
-        # non-UI caller of POST /notes should send its own source instead.
-        source="ui",
-    )
+    me = current_identity()
+    usage.charge_note(me, body.content)      # raises LimitReached -> 429
+    try:
+        db.upsert_note(
+            id=body.id,
+            title=body.title,
+            content=body.content,
+            last_edited=body.last_edited,
+            mark_pending=mark_pending,
+            # The REST route is what the Next.js dashboard posts to. A future
+            # non-UI caller of POST /notes should send its own source instead.
+            source="ui",
+        )
+    except Exception:
+        usage.refund(me, "notes", 1)
+        usage.refund(me, "words", usage.words_in(body.content))
+        raise
     return db.get_note(body.id)  # type: ignore[return-value]
 
 

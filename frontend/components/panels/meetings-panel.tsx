@@ -15,6 +15,7 @@ import {
   Upload,
   Users,
 } from "lucide-react"
+import { PlanLocked } from "@/components/plan-lock"
 
 /** One meeting in the list, as GET /ingest/transcripts returns it. */
 interface TranscriptRow {
@@ -193,10 +194,13 @@ export function MeetingsPanel({
   workspace,
   workspaces = [],
   backendAvailable,
+  canAdd = true,
 }: {
   workspace: string
   workspaces?: { id: string; name?: string }[]
   backendAvailable: boolean
+  /** False when the person's plan has no "Meetings": results stay readable. */
+  canAdd?: boolean
 }) {
   const [rows, setRows] = useState<TranscriptRow[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -328,7 +332,7 @@ export function MeetingsPanel({
       <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
         {/* Meeting list + intake */}
         <aside className="flex flex-col gap-3">
-          <AddMeeting
+          {!canAdd ? <PlanLocked feature="meetings" compact /> : <AddMeeting
             workspace={workspace}
             workspaces={workspaces}
             modes={modes}
@@ -341,7 +345,7 @@ export function MeetingsPanel({
                 setNotice(`Added to the "${target}" workspace. Switch to it in the header to watch it process.`)
               }
             }}
-          />
+          />}
           <div className="flex items-center justify-between">
             <h3 className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
               Meetings &middot; {rows.length}

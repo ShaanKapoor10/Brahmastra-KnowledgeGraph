@@ -227,7 +227,7 @@ def test_a_model_can_be_overridden_per_provider(monkeypatch):
     monkeypatch.setenv("GEMINI_MODEL", "gemini-3-pro")
     assert model_for("gemini") == "gemini-3-pro"
     monkeypatch.setenv("GEMINI_MODEL", "")          # present-but-empty is unset
-    assert model_for("gemini") == "gemini-2.5-flash"
+    assert model_for("gemini") == "gemini-3.5-flash-lite"
 
 
 def test_active_model_follows_whichever_provider_is_live(monkeypatch):
@@ -281,3 +281,193 @@ def test_extraction_reaches_a_new_provider_without_its_own_code(monkeypatch):
 
     assert extraction._extract_with_llm("T", "C") == []
     assert seen["provider"] == "gemini"
+
+
+# ---------------------------------------------------------------------------
+# Gemini: thinking is billed, so it is pinned and counted
+# ---------------------------------------------------------------------------
+
+def _fake_genai(monkeypatch, usage):
+    """A stand-in google.genai that records the config it was called with."""
+    import sys
+    import types as pytypes
+
+    seen: dict = {}
+
+    class _Config:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    class _Thinking:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class _Models:
+        def generate_content(self, *, model, contents, config):
+            seen["model"] = model
+            return pytypes.SimpleNamespace(text='{"triples": []}', usage_metadata=usage)
+
+    class _Client:
+        def __init__(self, api_key):
+            self.models = _Models()
+
+    def _level(value):
+        if value not in ("MINIMAL", "LOW", "MEDIUM", "HIGH"):
+            raise ValueError(value)
+        return value
+
+    gtypes = pytypes.SimpleNamespace(GenerateContentConfig=_Config, ThinkingConfig=_Thinking,
+                                     ThinkingLevel=_level)
+    genai = pytypes.SimpleNamespace(Client=_Client, types=gtypes)
+    google = pytypes.SimpleNamespace(genai=genai)
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.genai", genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", gtypes)
+    return seen
+
+
+def test_gemini_pins_thinking_to_minimal_and_counts_thought_tokens(monkeypatch):
+    """
+    Gemini bills thinking as output, and 3.x models think by default. Unpinned,
+    every extraction pays for reasoning nobody reads -- and LLM_CHARS cannot
+    see it, because thoughts are not in the reply text.
+    """
+    pytest.importorskip("prometheus_client")
+    import types as pytypes
+
+    from brahmastra import llm, metrics
+
+    usage = pytypes.SimpleNamespace(prompt_token_count=1200, candidates_token_count=80,
+                                    thoughts_token_count=15)
+    seen = _fake_genai(monkeypatch, usage)
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    def counted(kind: str) -> float:
+        return metrics.LLM_TOKENS.labels("gemini", kind)._value.get()
+
+    before = {k: counted(k) for k in ("input", "output", "thoughts")}
+    reply = llm._gemini_chat("system", "user", json_mode=True, temperature=0.0,
+                             max_tokens=100, retries=1)
+
+    assert reply == '{"triples": []}'
+    assert seen["model"] == "gemini-3.5-flash-lite"
+    assert seen["response_mime_type"] == "application/json"
+    assert seen["thinking_config"].kw == {"thinking_level": "MINIMAL"}
+    assert counted("input") - before["input"] == 1200
+    assert counted("output") - before["output"] == 80
+    assert counted("thoughts") - before["thoughts"] == 15
+
+
+def test_gemini_thinking_setting_can_be_left_out(monkeypatch):
+    """3.8 Flash has no "minimal" level: "off" must send no setting at all."""
+    from brahmastra import llm
+
+    seen = _fake_genai(monkeypatch, None)
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "off")
+    llm._gemini_chat("s", "u", json_mode=False, temperature=0.0, max_tokens=10, retries=1)
+    assert "thinking_config" not in seen
+
+
+def test_a_mistyped_thinking_level_fails_with_its_name(monkeypatch):
+    from brahmastra import llm
+
+    _fake_genai(monkeypatch, None)
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "minimum")
+    with pytest.raises(llm.LLMUnavailable, match="GEMINI_THINKING_LEVEL"):
+        llm._gemini_chat("s", "u", json_mode=False, temperature=0.0, max_tokens=10, retries=1)
+
+
+# ---------------------------------------------------------------------------
+# OpenCode Zen: the OpenAI wire format at another address
+# ---------------------------------------------------------------------------
+
+def _fake_openai(monkeypatch, usage):
+    """A stand-in openai.OpenAI that records how it was built and called."""
+    import sys
+    import types as pytypes
+
+    seen: dict = {}
+
+    class _Completions:
+        def create(self, **kw):
+            seen["call"] = kw
+            msg = pytypes.SimpleNamespace(content='{"triples": []}')
+            return pytypes.SimpleNamespace(choices=[pytypes.SimpleNamespace(message=msg)],
+                                           usage=usage)
+
+    class _OpenAI:
+        def __init__(self, api_key, base_url=None):
+            seen["api_key"], seen["base_url"] = api_key, base_url
+            self.chat = pytypes.SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", pytypes.SimpleNamespace(OpenAI=_OpenAI))
+    return seen
+
+
+def test_opencode_reaches_the_zen_gateway_with_its_own_key_and_model(monkeypatch):
+    from brahmastra import llm
+
+    seen = _fake_openai(monkeypatch, None)
+    monkeypatch.setenv("OPENCODE_API_KEY", "oc-test-not-a-real-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-must-not-be-used")
+    monkeypatch.delenv("OPENCODE_MODEL", raising=False)
+    monkeypatch.delenv("OPENCODE_BASE_URL", raising=False)
+
+    reply = llm._dispatch("opencode", "system", "user", json_mode=True, json_schema=None,
+                          temperature=0.0, max_tokens=50, num_ctx=0, timeout=10, retries=1)
+
+    assert reply == '{"triples": []}'
+    assert seen["api_key"] == "oc-test-not-a-real-key"
+    assert seen["base_url"] == "https://opencode.ai/inference/openai/v1"
+    assert seen["call"]["model"] == "deepseek-v4.1-flash-free"
+    assert seen["call"]["response_format"] == {"type": "json_object"}
+
+
+def test_plain_openai_still_goes_to_openai(monkeypatch):
+    from brahmastra import llm
+
+    seen = _fake_openai(monkeypatch, None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    llm._dispatch("openai", "s", "u", json_mode=False, json_schema=None,
+                  temperature=0.0, max_tokens=10, num_ctx=0, timeout=10, retries=1)
+    assert seen["base_url"] is None
+    assert seen["call"]["model"] == llm.model_for("openai")
+
+
+def test_opencode_is_never_picked_just_because_its_key_appeared(monkeypatch):
+    """Registry order is the fallback order; OpenCode sits after every other
+    cloud provider, so it is reached only by LLM_PROVIDER=opencode."""
+    from brahmastra import llm
+
+    monkeypatch.setattr(llm, "provider_status",
+                        lambda: {p: p in ("groq", "opencode") for p in llm.PROVIDERS})
+    monkeypatch.setenv("LLM_PROVIDER", "")
+    assert llm.resolve_provider() == "groq"
+    monkeypatch.setenv("LLM_PROVIDER", "opencode")
+    assert llm.resolve_provider() == "opencode"
+
+
+def test_openai_style_reasoning_is_counted_as_thoughts_not_output(monkeypatch):
+    """OpenAI counts reasoning inside completion_tokens; Gemini keeps it apart.
+    Split here, "output" means the same thing for every provider."""
+    pytest.importorskip("prometheus_client")
+    import types as pytypes
+
+    from brahmastra import llm, metrics
+
+    usage = pytypes.SimpleNamespace(
+        prompt_tokens=900, completion_tokens=300,
+        completion_tokens_details=pytypes.SimpleNamespace(reasoning_tokens=120))
+    _fake_openai(monkeypatch, usage)
+    monkeypatch.setenv("OPENCODE_API_KEY", "oc-test-not-a-real-key")
+
+    def counted(kind: str) -> float:
+        return metrics.LLM_TOKENS.labels("opencode", kind)._value.get()
+
+    before = {k: counted(k) for k in ("input", "output", "thoughts")}
+    llm._dispatch("opencode", "s", "u", json_mode=False, json_schema=None,
+                  temperature=0.0, max_tokens=10, num_ctx=0, timeout=10, retries=1)
+    assert counted("input") - before["input"] == 900
+    assert counted("output") - before["output"] == 180
+    assert counted("thoughts") - before["thoughts"] == 120

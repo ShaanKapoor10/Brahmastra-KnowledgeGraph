@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from brahmastra.auth import auth_status, require_api_key
+from brahmastra.usage import LimitReached
 from brahmastra import logs as _logs
 
 _logs.configure()
@@ -277,6 +278,15 @@ if _mcp_http_enabled():
     _mcp.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True, allowed_hosts=_hosts, allowed_origins=_origins)
     app.mount("/mcp", _mcp.streamable_http_app())
+
+@app.exception_handler(LimitReached)
+async def _plan_limit_handler(request, exc: LimitReached):
+    """A plan limit, raised from wherever the work entered (usage.charge)."""
+    import time as _time
+
+    return JSONResponse(status_code=429, content=exc.body(),
+                        headers={"Retry-After": str(max(1, int(exc.reset_at - _time.time())))})
+
 
 @app.exception_handler(Exception)
 async def _graph_outage_handler(request, exc):

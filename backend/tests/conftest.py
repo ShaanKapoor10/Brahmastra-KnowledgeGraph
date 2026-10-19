@@ -172,7 +172,8 @@ def _isolate_storage_choice(monkeypatch):
                        # here would have handed every unstubbed test four live
                        # keys -- the same leak this block was written to close,
                        # reopened by a new variable nobody listed.
-                       "GROQ_API_KEYS", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+                       "GROQ_API_KEYS", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                       "OPENCODE_API_KEY"):
         monkeypatch.setenv(credential, "")
 
     # And the key pool's memory of which keys are resting. Module state
@@ -297,12 +298,14 @@ def _fresh_accounts():
     database, so both are reset, or one test's admin would lock the next test's
     anonymous app.
     """
-    from brahmastra import accounts, auth, ratelimit
+    from brahmastra import accounts, auth, ratelimit, usage
 
     accounts.reset_store_for_tests()
     auth.reset_for_tests()
     ratelimit.reset()
+    usage.reset()          # plan usage counters: a cached store, like the rate limiter's
     yield
     accounts.reset_store_for_tests()
     auth.reset_for_tests()
+    usage.reset()
 

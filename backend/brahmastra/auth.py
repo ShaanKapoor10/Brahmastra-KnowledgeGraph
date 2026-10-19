@@ -29,6 +29,9 @@ WHO (first match wins):
 WHAT (`required_role`): viewers read, search and ask; members also write,
 ingest and run the pipeline; admins also manage users, keys and workspaces.
 
+PLAN: after the role, the person's plan must include the route's feature
+(plans.route_feature). A plan narrows what a role allows; it never widens it.
+
 WHERE: a non-admin may open only the workspaces they are a member of. The
 workspace is bound per request before this runs (main.bind_workspace), so the
 check here covers every route at once rather than relying on each router to
@@ -37,6 +40,7 @@ remember -- a guard at one caller is not a guard.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import os
 import time
@@ -56,7 +60,13 @@ _OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/livez",
 # Routes that act on accounts rather than on a workspace's data.
 _WORKSPACE_FREE_PREFIXES = ("/auth/", "/workspaces")
 
-_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys")
+# "/auth/usage/" (with the slash) is the admin Usage tab; "/auth/usage" alone
+# is a person's own usage and stays self-service.
+# Likewise "/auth/plans/<id>" (editing a plan) is admin; "/auth/plans" (reading
+# them) is for everyone. "/auth/requests" is the admins' queue; a person's own
+# requests live under "/auth/me/".
+_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys", "/auth/usage/", "/auth/plans/",
+                   "/auth/requests")
 _SELF_SERVICE_PREFIXES = ("/auth/me", "/auth/logout", "/auth/password", "/auth/tokens")
 # POSTs a viewer may make: they read and spend, but change nothing stored.
 _VIEWER_POSTS = frozenset({"/ask"})
@@ -197,6 +207,37 @@ async def require_api_key(request: Request, call_next):
     if need and not identity.at_least(need):
         return _deny(403, f"This needs the {need} role; you are a {identity.role}.")
 
+    # The plan, AFTER the role: a plan can only narrow what a role allows.
+    from brahmastra.plans import refusal, route_feature
+
+    feature = route_feature(request.method, path)
+    if feature and not identity.has(feature):
+        return JSONResponse(status_code=403, content={"detail": refusal(feature), "code": "plan_feature",
+                                                      "feature": feature})
+
+    # A question is counted against the plan BEFORE it is answered, so two
+    # parallel requests cannot both take the last one, and handed back below
+    # if the answer fails. Notes and meetings are counted where they enter,
+    # because their size is in the request body.
+    charged = False
+    asking = request.method == "POST" and path == "/ask"
+    if identity.user_id and asking:
+        from brahmastra import usage
+
+        try:
+            # A spent token budget refuses the question before it is counted.
+            problem = await run_in_threadpool(usage.budget_problem, identity.user_id)
+            if problem:
+                return JSONResponse(status_code=429, content={"detail": problem, "code": "token_budget"})
+            await run_in_threadpool(usage.charge, identity, "questions")
+            charged = True
+        except usage.LimitReached as e:
+            return JSONResponse(status_code=429, content=e.body(),
+                                headers={"Retry-After": str(max(1, int(e.reset_at - time.time())))})
+        except Exception:                               # noqa: BLE001
+            # The counter is unreachable: a meter must never take the API down.
+            pass
+
     if identity.user_id:
         from brahmastra import ratelimit
 
@@ -216,7 +257,29 @@ async def require_api_key(request: Request, call_next):
 
     request.state.identity = identity
     token = bind_identity(identity)
+    from brahmastra import usage
+
+    purpose = usage.charging(purpose="ask") if asking else contextlib.nullcontext()
     try:
-        return await call_next(request)
+        with purpose:
+            response = await call_next(request)
+    except Exception:
+        # A route that raises reaches here as an exception, not as a 500.
+        if charged:
+            await _refund_question(identity)
+        raise
     finally:
         unbind_identity(token)
+    if charged and response.status_code >= 400:
+        await _refund_question(identity)
+    return response
+
+
+async def _refund_question(identity) -> None:
+    """A failed question was not answered, so it does not count."""
+    from brahmastra import usage
+
+    try:
+        await run_in_threadpool(usage.refund, identity, "questions")
+    except Exception:                                   # noqa: BLE001
+        pass

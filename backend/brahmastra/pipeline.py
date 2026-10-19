@@ -338,7 +338,14 @@ def run_pipeline(full: bool = False) -> dict[str, Any]:
     began = time.time()
 
     try:
-        outcome = _run_pipeline_locked(full, result)
+        # The graph, its summaries and entity checks serve everyone in the
+        # workspace, so they are charged to it -- not to whoever pressed "run".
+        # Reading each note is charged to its author (extraction.extract_note).
+        from brahmastra import usage
+        from brahmastra.workspace import current_workspace
+
+        with usage.charging(workspace=current_workspace(), purpose="graph"):
+            outcome = _run_pipeline_locked(full, result)
         try:
             from brahmastra import metrics
 

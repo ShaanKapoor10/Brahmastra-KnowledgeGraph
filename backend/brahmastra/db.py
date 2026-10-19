@@ -127,6 +127,12 @@ def upsert_note(
     get_store().upsert_note(
         id, title, content, last_edited, mark_pending, publish, source
     )
+    # Who added it, so the tokens spent reading it are charged to them
+    # (usage.py). Only a person's request has a "who"; syncs and meeting
+    # records are written with none and stay unattributed.
+    from brahmastra import usage
+
+    usage.remember_author(id)
 
 
 def set_notion_page_id(note_id: str, page_id: str) -> None:

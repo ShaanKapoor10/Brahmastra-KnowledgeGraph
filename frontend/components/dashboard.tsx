@@ -20,11 +20,14 @@ import { MeetingsPanel } from "@/components/panels/meetings-panel"
 import { DiagnosticsPanel } from "@/components/panels/diagnostics-panel"
 import { AccountPanel } from "@/components/panels/account-panel"
 import { TeamPanel } from "@/components/panels/team-panel"
-import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users } from "lucide-react"
+import { UsagePanel } from "@/components/panels/usage-panel"
+import { PlanLocked } from "@/components/plan-lock"
+import { can } from "@/lib/plans"
+import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users, Gauge } from "lucide-react"
 
 type View =
   | "graph" | "ask" | "central" | "clusters" | "contradictions" | "links" | "resolution" | "notes"
-  | "meetings" | "diagnostics" | "account" | "team"
+  | "meetings" | "diagnostics" | "account" | "team" | "usage"
 
 const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "graph", label: "Graph", icon: Network },
@@ -39,6 +42,7 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
   { id: "account", label: "Account", icon: UserCog },
   { id: "team", label: "Team", icon: Users },
+  { id: "usage", label: "Usage", icon: Gauge },
 ]
 
 /** Who is signed in, as GET /auth/me returns it. */
@@ -49,6 +53,15 @@ export interface SignedInUser {
   name: string | null
   /** The workspaces this person may open; null means every workspace (admins). */
   workspaces?: string[] | null
+  /** Plan id, and the features it includes; features null means every feature. */
+  plan?: string | null
+  features?: string[] | null
+}
+
+/** The plan feature each view needs; views not listed need none. */
+const VIEW_FEATURE: Partial<Record<View, string>> = {
+  graph: "graph", ask: "ask", central: "graph", clusters: "graph", contradictions: "graph",
+  links: "graph", resolution: "graph",
 }
 
 interface Props {
@@ -319,7 +332,7 @@ export function Dashboard({
           {TABS.filter((t) =>
             // Account needs someone signed in; Team is for admins. The backend
             // refuses the calls either way -- this only hides tabs that would fail.
-            t.id === "account" ? Boolean(user) : t.id === "team" ? user?.role === "admin" : true,
+            t.id === "account" ? Boolean(user) : t.id === "team" || t.id === "usage" ? user?.role === "admin" : true,
           ).map((t) => {
             const Icon = t.icon
             const active = view === t.id
@@ -352,7 +365,9 @@ export function Dashboard({
       {/* Body */}
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-hidden">
-          {view === "graph" ? (
+          {VIEW_FEATURE[view] && !can(user, VIEW_FEATURE[view]!) ? (
+            <div className="mx-auto max-w-3xl px-4 py-5 sm:px-6"><PlanLocked feature={VIEW_FEATURE[view]!} /></div>
+          ) : view === "graph" ? (
             <GraphView
               graph={result.graph}
               clusters={result.clusters}
@@ -363,7 +378,7 @@ export function Dashboard({
           ) : (
             <div className="h-full overflow-y-auto px-4 py-5 sm:px-6">
               {/* Meetings and Diagnostics lay out side by side; the rest read as one column. */}
-              <div className={`mx-auto ${view === "meetings" || view === "diagnostics" ? "max-w-6xl" : "max-w-3xl"}`}>
+              <div className={`mx-auto ${view === "meetings" || view === "diagnostics" || view === "usage" ? "max-w-6xl" : "max-w-3xl"}`}>
                 {view === "ask" && <AskPanel backendAvailable={backendAvailable} />}
                 {view === "central" && (
                   <CentralEntities central={result.central} onSelect={select} selected={selected} />
@@ -374,11 +389,12 @@ export function Dashboard({
                 )}
                 {view === "links" && <PredictedLinks links={result.predictedLinks} onSelect={select} />}
                 {view === "resolution" && <EntityResolution resolution={result.resolution} onSelect={select} />}
-                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} />}
-                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} />}
+                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} canAdd={can(user, "add_notes")} />}
+                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} canAdd={can(user, "meetings")} />}
                 {view === "diagnostics" && <DiagnosticsPanel workspace={workspace} backendAvailable={backendAvailable} />}
                 {view === "account" && user && <AccountPanel user={user} />}
                 {view === "team" && user?.role === "admin" && <TeamPanel user={user} workspaces={workspaces} />}
+                {view === "usage" && user?.role === "admin" && <UsagePanel />}
               </div>
             </div>
           )}

@@ -23,6 +23,8 @@ from brahmastra.ingest import assemble
 from brahmastra.ingest.assemble import process_transcript
 from brahmastra.ingest.modes import MODES, get_mode, is_mode
 from brahmastra.ingest.store import Transcript, get_ingest_store
+from brahmastra import usage
+from brahmastra.accounts import current_identity
 from brahmastra.workspace import current_workspace
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -61,7 +63,7 @@ async def list_modes() -> list[dict[str, Any]]:
     return [m.as_dict() for m in MODES.values()]
 
 
-def _launch(transcript_id: str, workspace: str) -> None:
+def _launch(transcript_id: str, workspace: str, user_id: str | None = None) -> None:
     """
     Run in the background, in the workspace the REQUEST named.
 
@@ -74,9 +76,17 @@ def _launch(transcript_id: str, workspace: str) -> None:
 
     token = set_request_workspace(workspace)
     try:
-        process_transcript(transcript_id, workspace=workspace)
+        # Charged to the person who submitted it; the background task has no
+        # request identity of its own.
+        with usage.charging(user_id=user_id, workspace=None if user_id else workspace, purpose="meeting"):
+            process_transcript(transcript_id, workspace=workspace)
     finally:
         reset_request_workspace(token)
+
+
+def _submitter() -> str | None:
+    me = current_identity()
+    return me.user_id if me is not None else None
 
 
 @router.post("/transcripts")
@@ -84,6 +94,7 @@ async def submit_transcript(
     body: TranscriptIn, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:
     """Accept a transcript as JSON and start processing it."""
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(body.content))
     workspace = current_workspace()
     store = get_ingest_store(workspace)
     tid = store.create_transcript(Transcript(
@@ -91,7 +102,7 @@ async def submit_transcript(
         source_ref=body.source_ref, occurred_at=body.occurred_at,
         mode=_checked_mode(body.mode),
     ))
-    background_tasks.add_task(_launch, tid, workspace)
+    background_tasks.add_task(_launch, tid, workspace, _submitter())
     return {"transcript_id": tid, "status": "pending", "workspace": workspace,
             "mode": get_mode(body.mode).id}
 
@@ -132,6 +143,7 @@ async def upload_transcript(
     if not text.strip():
         raise HTTPException(status_code=400, detail="the file is empty")
 
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(text))
     workspace = current_workspace()
     store = get_ingest_store(workspace)
     tid = store.create_transcript(Transcript(
@@ -139,7 +151,7 @@ async def upload_transcript(
         source="upload", source_ref=name, occurred_at=occurred_at or None,
         mode=chosen,
     ))
-    background_tasks.add_task(_launch, tid, workspace)
+    background_tasks.add_task(_launch, tid, workspace, _submitter())
     return {"transcript_id": tid, "status": "pending", "workspace": workspace,
             "characters": len(text)}
 
@@ -219,9 +231,11 @@ async def reprocess(transcript_id: str,
     if record is None:
         raise HTTPException(status_code=404, detail=f"no transcript {transcript_id!r}")
     chosen = _checked_mode(mode)
+    # Processing again costs again, so it counts again.
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(record.get("content") or ""))
     if chosen:
         store.set_transcript_mode(transcript_id, chosen)
-    background_tasks.add_task(_launch, transcript_id, workspace)
+    background_tasks.add_task(_launch, transcript_id, workspace, _submitter())
     return {"transcript_id": transcript_id, "status": "pending",
             "mode": get_mode(chosen or record.get("mode")).id}
 

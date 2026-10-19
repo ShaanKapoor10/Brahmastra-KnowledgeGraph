@@ -47,6 +47,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import secrets
 import time
 import uuid
@@ -138,10 +139,17 @@ class Identity:
     name: str | None = None
     workspaces: frozenset[str] | None = None
     token_id: str | None = None
+    # The features this person's plan includes (plans.FEATURES); None means
+    # every feature -- the service key and anonymous development mode.
+    features: frozenset[str] | None = None
+    plan: str | None = None
     extra: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def at_least(self, role: str) -> bool:
         return _RANK[self.role] >= _RANK[role]
+
+    def has(self, feature: str) -> bool:
+        return self.features is None or feature in self.features
 
     def can_open(self, workspace_id: str) -> bool:
         return self.workspaces is None or workspace_id in self.workspaces
@@ -149,7 +157,9 @@ class Identity:
     def public(self) -> dict[str, Any]:
         return {"kind": self.kind, "role": self.role, "user_id": self.user_id, "email": self.email,
                 "name": self.name,
-                "workspaces": None if self.workspaces is None else sorted(self.workspaces)}
+                "workspaces": None if self.workspaces is None else sorted(self.workspaces),
+                "plan": self.plan,
+                "features": None if self.features is None else sorted(self.features)}
 
 
 SERVICE = Identity(kind="service", role="admin", name="service key")
@@ -198,6 +208,23 @@ class AccountStore(SidecarStore):
         target TEXT, detail TEXT, ip TEXT);
     CREATE TABLE IF NOT EXISTS login_failures (
         key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at DOUBLE PRECISION NOT NULL);
+    CREATE TABLE IF NOT EXISTS plans (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, features TEXT NOT NULL,
+        limits TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+        created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL);
+    CREATE TABLE IF NOT EXISTS user_plans (
+        user_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, assigned_by TEXT,
+        assigned_at DOUBLE PRECISION NOT NULL, expires_at DOUBLE PRECISION, return_plan_id TEXT);
+    CREATE TABLE IF NOT EXISTS plan_requests (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, plan_id TEXT,
+        limit_key TEXT, amount BIGINT, reason TEXT NOT NULL, status TEXT NOT NULL,
+        created_at DOUBLE PRECISION NOT NULL, decided_by TEXT, decided_at DOUBLE PRECISION,
+        decision_note TEXT, expires_at DOUBLE PRECISION);
+    CREATE TABLE IF NOT EXISTS plan_grants (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, limit_key TEXT NOT NULL, amount BIGINT NOT NULL,
+        period TEXT NOT NULL, granted_by TEXT, request_id TEXT, created_at DOUBLE PRECISION NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_plan_requests_status ON plan_requests (status);
+    CREATE INDEX IF NOT EXISTS idx_plan_grants_user ON plan_grants (user_id, period);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
     CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens (user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log (at)
@@ -222,19 +249,29 @@ class AccountStore(SidecarStore):
         return int(self._q("SELECT COUNT(*) AS n FROM users", one=True)["n"])
 
     def create_user(self, email: str, password: str, role: str = "member", name: str | None = None,
-                    workspaces: list[str] | None = None, actor: str | None = None) -> dict[str, Any]:
+                    workspaces: list[str] | None = None, actor: str | None = None,
+                    plan: str | None = None) -> dict[str, Any]:
         email = _norm_email(email)
         if role not in ROLES:
             raise AccountError(f"Role must be one of {', '.join(ROLES)}.")
         check_password_strength(password)
         if self._q("SELECT id FROM users WHERE email = ?", (email,), one=True):
             raise AccountError("A user with that email already exists.")
+        if plan is not None and self.get_plan(plan) is None:
+            raise AccountError("No such plan.")
+        # Before the insert: seeding maps EXISTING users by role, and this
+        # person is new, so they must get the new-user plan instead.
+        self.ensure_plans()
         uid = uuid.uuid4().hex
         self._q("INSERT INTO users (id, email, name, password_hash, role, disabled, created_at) "
                 "VALUES (?, ?, ?, ?, ?, 0, ?)", (uid, email, name, hash_password(password), role, time.time()))
         for ws in workspaces or []:
             self.add_member(uid, ws)
-        self.audit(actor, "user.create", email, f"role={role}")
+        from brahmastra.plans import plan_for_new_user
+
+        self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)",
+                (uid, plan or plan_for_new_user(role), actor, time.time()))
+        self.audit(actor, "user.create", email, f"role={role}, plan={plan or plan_for_new_user(role)}")
         return self._require_user(uid)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
@@ -243,6 +280,9 @@ class AccountStore(SidecarStore):
         if u:
             u["disabled"] = bool(u["disabled"])
             u["workspaces"] = self.member_workspaces(user_id)
+            u["plan"] = self.plan_id_for(user_id, u["role"])
+            row = self._q("SELECT expires_at FROM user_plans WHERE user_id = ?", (user_id,), one=True)
+            u["plan_expires_at"] = row["expires_at"] if row else None
         return u
 
     def _require_user(self, user_id: str) -> dict[str, Any]:
@@ -303,6 +343,9 @@ class AccountStore(SidecarStore):
         self.revoke_all(user_id)
         self._q("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
         self._q("DELETE FROM workspace_members WHERE user_id = ?", (user_id,))
+        self._q("DELETE FROM user_plans WHERE user_id = ?", (user_id,))
+        self._q("DELETE FROM plan_requests WHERE user_id = ?", (user_id,))
+        self._q("DELETE FROM plan_grants WHERE user_id = ?", (user_id,))
         self._q("DELETE FROM users WHERE id = ?", (user_id,))
         self.audit(actor, "user.delete", user["email"])
 
@@ -441,8 +484,251 @@ class AccountStore(SidecarStore):
         if not u or u["disabled"]:
             return None
         ws = None if u["role"] == "admin" else frozenset(self.member_workspaces(user_id))
+        plan = self.plan_for(user_id, u["role"])
         return Identity(kind=kind, role=u["role"], user_id=u["id"], email=u["email"], name=u["name"],
-                        workspaces=ws, token_id=token_id)
+                        workspaces=ws, token_id=token_id, plan=plan["id"],
+                        features=frozenset(plan["features"]))
+
+    # -- plans (see plans.py for what they mean)
+    def ensure_plans(self) -> None:
+        """Create the starting plans once, and give every existing person the plan
+        matching their role, so introducing plans takes nobody's access away.
+
+        Runs only while the plans table is empty. Every insert ignores a row that
+        is already there, so two workers starting at once cannot double it.
+        """
+        if self._q("SELECT id FROM plans LIMIT 1", one=True):
+            return
+        from brahmastra.plans import DEFAULT_PLANS, ROLE_PLAN
+
+        now = time.time()
+        for position, plan in enumerate(DEFAULT_PLANS):
+            self._q("INSERT INTO plans (id, name, description, features, limits, position, created_at, "
+                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+                    (plan["id"], plan["name"], plan["description"], json.dumps(plan["features"]),
+                     json.dumps(plan["limits"]), position, now, now))
+        for u in self._q("SELECT id, role FROM users", rows=True):
+            self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
+                    (u["id"], ROLE_PLAN.get(u["role"], "reader"), "rollout", now))
+        self.audit("system", "plans.seed", None, ", ".join(p["id"] for p in DEFAULT_PLANS))
+
+    @staticmethod
+    def _plan_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {"id": row["id"], "name": row["name"], "description": row["description"],
+                "features": json.loads(row["features"]), "limits": json.loads(row["limits"])}
+
+    def list_plans(self) -> list[dict[str, Any]]:
+        self.ensure_plans()
+        return [self._plan_row(r) for r in self._q("SELECT * FROM plans ORDER BY position, id", rows=True)]
+
+    def get_plan(self, plan_id: str) -> dict[str, Any] | None:
+        self.ensure_plans()
+        row = self._q("SELECT * FROM plans WHERE id = ?", (plan_id,), one=True)
+        return self._plan_row(row) if row else None
+
+    def plan_id_for(self, user_id: str, role: str) -> str:
+        """The plan a person is on. No row (a user created before plans by some
+        path that missed the rollout) falls back to the role's plan."""
+        from brahmastra.plans import ROLE_PLAN
+
+        self.ensure_plans()
+        row = self._q("SELECT plan_id, expires_at, return_plan_id FROM user_plans WHERE user_id = ?",
+                      (user_id,), one=True)
+        if row and row["expires_at"] and row["expires_at"] <= time.time():
+            # A time-limited plan has ended: back to the plan it replaced. Done
+            # on the first look after the end, so no scheduler has to remember.
+            back = row["return_plan_id"] or ROLE_PLAN.get(role, "reader")
+            self._q("UPDATE user_plans SET plan_id = ?, expires_at = NULL, return_plan_id = NULL, "
+                    "assigned_by = ?, assigned_at = ? WHERE user_id = ? AND plan_id = ?",
+                    (back, "expiry", time.time(), user_id, row["plan_id"]))
+            user = self._q("SELECT email FROM users WHERE id = ?", (user_id,), one=True)
+            self.audit("system", "plan.expire", user["email"] if user else user_id, f"{row['plan_id']} -> {back}")
+            return back
+        return row["plan_id"] if row else ROLE_PLAN.get(role, "reader")
+
+    def plan_for(self, user_id: str, role: str) -> dict[str, Any]:
+        plan = self.get_plan(self.plan_id_for(user_id, role))
+        if plan is None:
+            # The plan was deleted out from under the person: the least plan,
+            # never an error that locks them out of reading.
+            from brahmastra.plans import DEFAULT_PLANS
+
+            plan = dict(DEFAULT_PLANS[0])
+        return plan
+
+    def set_user_plan(self, user_id: str, plan_id: str, *, actor_id: str | None,
+                      actor: str | None, expires_at: float | None = None) -> dict[str, Any]:
+        """Put a person on a plan. Nobody changes their own plan, so every upgrade
+        has a second person behind it -- except a sole admin, who has nobody to
+        ask; the audit log records that it was self-assigned."""
+        user = self.get_user(user_id)
+        if not user:
+            raise AccountError("No such user.")
+        plan = self.get_plan(plan_id)
+        if not plan:
+            raise AccountError("No such plan.")
+        self_assigned = actor_id is not None and actor_id == user_id
+        if self_assigned and self._active_admins() > 1:
+            raise AccountError("You cannot change your own plan; ask another admin.")
+        if expires_at is not None and expires_at <= time.time():
+            raise AccountError("The end date must be in the future.")
+        before = user["plan"]
+        self._q("DELETE FROM user_plans WHERE user_id = ?", (user_id,))
+        self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at, expires_at, return_plan_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, plan_id, actor, time.time(), expires_at, before if expires_at else None))
+        until = f" until {time.strftime('%Y-%m-%d', time.gmtime(expires_at))}" if expires_at else ""
+        self.audit(actor, "plan.assign", user["email"],
+                   f"{before} -> {plan_id}{until}" + (" (self-assigned: sole admin)" if self_assigned else ""))
+        return self._require_user(user_id)
+
+    def effective_limits(self, user_id: str, role: str) -> dict[str, Any]:
+        """The plan's limits plus any top-up granted for the current day or month.
+        Every limit check reads this, so a top-up cannot be missed by one of them."""
+        from brahmastra.usage import periods
+
+        limits = dict(self.plan_for(user_id, role)["limits"])
+        now = periods()
+        rows = self._q("SELECT limit_key, SUM(amount) AS extra FROM plan_grants WHERE user_id = ? "
+                       "AND period IN (?, ?) GROUP BY limit_key",
+                       (user_id, now["day"][0], now["month"][0]), rows=True)
+        for r in rows:
+            if limits.get(r["limit_key"]) is not None:
+                limits[r["limit_key"]] = int(limits[r["limit_key"]]) + int(r["extra"])
+        return limits
+
+    def update_plan(self, plan_id: str, *, actor: str | None, name: str | None = None,
+                    description: str | None = None, features: list[str] | None = None,
+                    limits: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Change a plan for everyone on it. Validated; the audit records what changed."""
+        from brahmastra.plans import LIMITS, validate
+
+        plan = self.get_plan(plan_id)
+        if not plan:
+            raise AccountError("No such plan.")
+        new_features = plan["features"] if features is None else list(dict.fromkeys(features))
+        new_limits = dict(plan["limits"])
+        if limits is not None:
+            new_limits.update(limits)
+        try:
+            validate(new_features, new_limits)
+        except ValueError as e:
+            raise AccountError(str(e)) from e
+        if plan_id == "unlimited" and set(new_features) != set(plan["features"]):
+            # The admins' plan: taking a feature away from it could leave nobody
+            # able to restore it from the screen.
+            raise AccountError("The Unlimited plan's features cannot be changed.")
+        changes = []
+        if set(new_features) != set(plan["features"]):
+            added, removed = set(new_features) - set(plan["features"]), set(plan["features"]) - set(new_features)
+            changes.append(" ".join([*(f"+{f}" for f in sorted(added)), *(f"-{f}" for f in sorted(removed))]))
+        for key in LIMITS:
+            if new_limits.get(key) != plan["limits"].get(key):
+                changes.append(f"{key}: {plan['limits'].get(key)} -> {new_limits.get(key)}")
+        self._q("UPDATE plans SET name = ?, description = ?, features = ?, limits = ?, updated_at = ? WHERE id = ?",
+                ((name or plan["name"]).strip()[:60], description if description is not None else plan["description"],
+                 json.dumps(new_features), json.dumps(new_limits), time.time(), plan_id))
+        self.audit(actor, "plan.edit", plan_id, "; ".join(changes) or "name or description")
+        return self.get_plan(plan_id)  # type: ignore[return-value]
+
+    # -- upgrade requests: people ask, admins decide, everything is recorded
+    def _request_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        user = self._q("SELECT email, name FROM users WHERE id = ?", (row["user_id"],), one=True) or {}
+        return {**row, "email": user.get("email"), "name": user.get("name")}
+
+    def create_request(self, user_id: str, *, kind: str, reason: str, plan_id: str | None = None,
+                       limit_key: str | None = None, amount: int | None = None) -> dict[str, Any]:
+        from brahmastra.plans import LIMITS
+
+        user = self.get_user(user_id)
+        if not user:
+            raise AccountError("No such user.")
+        reason = (reason or "").strip()
+        if len(reason) < 3:
+            raise AccountError("Say briefly why you need it.")
+        if kind == "plan":
+            if not plan_id or not self.get_plan(plan_id):
+                raise AccountError("No such plan.")
+            if plan_id == user["plan"]:
+                raise AccountError("You are already on that plan.")
+            limit_key, amount = None, None
+        elif kind == "topup":
+            if limit_key not in LIMITS:
+                raise AccountError("Choose which limit to raise.")
+            if not isinstance(amount, int) or amount <= 0:
+                raise AccountError("The extra amount must be a whole number above 0.")
+            plan_id = None
+        else:
+            raise AccountError("A request is for a plan or a top-up.")
+        if self._q("SELECT id FROM plan_requests WHERE user_id = ? AND kind = ? AND status = 'pending'",
+                   (user_id, kind), one=True):
+            raise AccountError("You already have a request like this waiting; cancel it to ask differently.")
+        rid = uuid.uuid4().hex
+        self._q("INSERT INTO plan_requests (id, user_id, kind, plan_id, limit_key, amount, reason, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (rid, user_id, kind, plan_id, limit_key, amount, reason[:500], time.time()))
+        what = plan_id if kind == "plan" else f"+{amount} {limit_key}"
+        self.audit(user["email"], "plan.request", user["email"], f"{kind}: {what}")
+        return self.get_request(rid)  # type: ignore[return-value]
+
+    def get_request(self, request_id: str) -> dict[str, Any] | None:
+        row = self._q("SELECT * FROM plan_requests WHERE id = ?", (request_id,), one=True)
+        return self._request_row(row) if row else None
+
+    def list_requests(self, *, status: str | None = None, user_id: str | None = None,
+                      limit: int = 200) -> list[dict[str, Any]]:
+        where, params = [], []
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if user_id:
+            where.append("user_id = ?")
+            params.append(user_id)
+        sql = ("SELECT * FROM plan_requests" + (" WHERE " + " AND ".join(where) if where else "")
+               + " ORDER BY created_at DESC LIMIT ?")
+        return [self._request_row(r) for r in self._q(sql, (*params, max(1, min(limit, 1000))), rows=True)]
+
+    def cancel_request(self, user_id: str, request_id: str) -> None:
+        req = self.get_request(request_id)
+        if not req or req["user_id"] != user_id:
+            raise AccountError("No such request.")
+        if req["status"] != "pending":
+            raise AccountError("Only a waiting request can be cancelled.")
+        self._q("UPDATE plan_requests SET status = 'cancelled', decided_at = ? WHERE id = ?", (time.time(), request_id))
+        self.audit(req["email"], "plan.request.cancel", req["email"], request_id)
+
+    def decide_request(self, request_id: str, *, approve: bool, actor_id: str | None, actor: str | None,
+                       note: str | None = None, expires_at: float | None = None) -> dict[str, Any]:
+        """Approve or decline. Same rule as assigning a plan: nobody approves their
+        own request while another admin exists to do it."""
+        req = self.get_request(request_id)
+        if not req:
+            raise AccountError("No such request.")
+        if req["status"] != "pending":
+            raise AccountError(f"This request was already {req['status']}.")
+        if actor_id == req["user_id"] and self._active_admins() > 1:
+            raise AccountError("You cannot decide your own request; ask another admin.")
+        note = (note or "").strip()[:500] or None
+        if approve:
+            if req["kind"] == "plan":
+                self.set_user_plan(req["user_id"], req["plan_id"], actor_id=None, actor=actor,
+                                   expires_at=expires_at)
+            else:
+                from brahmastra.usage import periods
+
+                period = periods()["day" if req["limit_key"].endswith("_day") else "month"][0]
+                self._q("INSERT INTO plan_grants (id, user_id, limit_key, amount, period, granted_by, request_id, "
+                        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (uuid.uuid4().hex, req["user_id"], req["limit_key"], req["amount"], period, actor,
+                         request_id, time.time()))
+        status = "approved" if approve else "declined"
+        self._q("UPDATE plan_requests SET status = ?, decided_by = ?, decided_at = ?, decision_note = ?, "
+                "expires_at = ? WHERE id = ?", (status, actor, time.time(), note, expires_at, request_id))
+        what = req["plan_id"] if req["kind"] == "plan" else f"+{req['amount']} {req['limit_key']}"
+        self.audit(actor, f"plan.request.{'approve' if approve else 'decline'}", req["email"],
+                   f"{req['kind']}: {what}" + (f" ({note})" if note else ""))
+        return self.get_request(request_id)  # type: ignore[return-value]
 
     # -- audit
     def audit(self, actor: str | None, action: str, target: str | None = None, detail: str = "",
