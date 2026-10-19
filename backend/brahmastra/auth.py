@@ -62,7 +62,11 @@ _WORKSPACE_FREE_PREFIXES = ("/auth/", "/workspaces")
 
 # "/auth/usage/" (with the slash) is the admin Usage tab; "/auth/usage" alone
 # is a person's own usage and stays self-service.
-_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys", "/auth/usage/")
+# Likewise "/auth/plans/<id>" (editing a plan) is admin; "/auth/plans" (reading
+# them) is for everyone. "/auth/requests" is the admins' queue; a person's own
+# requests live under "/auth/me/".
+_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys", "/auth/usage/", "/auth/plans/",
+                   "/auth/requests")
 _SELF_SERVICE_PREFIXES = ("/auth/me", "/auth/logout", "/auth/password", "/auth/tokens")
 # POSTs a viewer may make: they read and spend, but change nothing stored.
 _VIEWER_POSTS = frozenset({"/ask"})

@@ -16,7 +16,7 @@ export function PlanLocked({ feature, compact = false }: { feature: string; comp
       <Lock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="flex flex-col gap-0.5">
         <p className="text-sm font-medium text-foreground">{name} is not in your plan</p>
-        <p className="text-sm text-muted-foreground">Ask an admin to move you to a plan that includes it.</p>
+        <p className="text-sm text-muted-foreground">Ask for a plan that includes it under Account, in &ldquo;Ask for more&rdquo;.</p>
       </div>
     </div>
   )

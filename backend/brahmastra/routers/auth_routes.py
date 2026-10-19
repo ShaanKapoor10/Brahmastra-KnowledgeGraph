@@ -23,7 +23,14 @@ Accounts over HTTP: sign in, personal API tokens, and (for admins) users.
     GET    /auth/usage/export.csv       admin: this month's people table as CSV
     GET    /auth/usage/budget           admin: the company's token budgets
     PUT    /auth/usage/budget           admin: set them (capped by TOKEN_BUDGET_DAY/_MONTH)
-    PUT    /auth/users/{id}/plan        admin: put someone on a plan (not yourself)
+    PUT    /auth/users/{id}/plan        admin: put someone on a plan (not yourself), optionally until a date
+    PUT    /auth/plans/{id}             admin: change a plan's name, features or limits
+    GET    /auth/me/requests            my upgrade and top-up requests
+    POST   /auth/me/requests            ask for another plan, or a top-up for this day or month
+    DELETE /auth/me/requests/{id}       cancel one still waiting
+    GET    /auth/requests               admin: requests (?status=pending), with each person's usage
+    POST   /auth/requests/{id}/approve  admin: approve (a plan change may end on a date)
+    POST   /auth/requests/{id}/decline  admin: decline, with a note
 
 Who may call what is decided in auth.required_role, not here, so these handlers
 never contain a permission check that a refactor could drop.
@@ -90,6 +97,27 @@ class Budget(BaseModel):
 
 class PlanChoice(BaseModel):
     plan_id: str = Field(..., min_length=1, max_length=64)
+    expires_at: float | None = None          # seconds since the epoch; None: permanent
+
+
+class PlanEdit(BaseModel):
+    name: str | None = Field(default=None, max_length=60)
+    description: str | None = Field(default=None, max_length=300)
+    features: list[str] | None = None
+    limits: dict[str, int | None] | None = None
+
+
+class PlanRequestIn(BaseModel):
+    kind: str = Field(..., pattern="^(plan|topup)$")
+    reason: str = Field(..., max_length=500)
+    plan_id: str | None = Field(default=None, max_length=64)
+    limit_key: str | None = Field(default=None, max_length=64)
+    amount: int | None = Field(default=None, gt=0, le=1_000_000_000)
+
+
+class Decision(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
+    expires_at: float | None = None
 
 
 class NewPassword(BaseModel):
@@ -337,9 +365,78 @@ def set_plan(user_id: str, body: PlanChoice, request: Request) -> dict[str, Any]
     me_ = _me(request)
     try:
         return accounts.store().set_user_plan(user_id, body.plan_id, actor_id=me_.user_id,
-                                              actor=_actor(request))
+                                              actor=_actor(request), expires_at=body.expires_at)
     except AccountError as e:
-        _fail(e, 404 if "No such" in str(e) else 403)
+        _fail(e, 404 if "No such" in str(e) else 403 if "own plan" in str(e) else 400)
+
+
+@router.put("/plans/{plan_id}")
+def edit_plan(plan_id: str, body: PlanEdit, request: Request) -> dict[str, Any]:
+    try:
+        return accounts.store().update_plan(plan_id, actor=_actor(request), name=body.name,
+                                            description=body.description, features=body.features,
+                                            limits=body.limits)
+    except AccountError as e:
+        _fail(e, 404 if "No such" in str(e) else 400)
+
+
+@router.get("/me/requests")
+def my_requests(request: Request) -> dict[str, Any]:
+    return {"requests": accounts.store().list_requests(user_id=_user_only(request).user_id, limit=50)}
+
+
+@router.post("/me/requests", status_code=201)
+def make_request(body: PlanRequestIn, request: Request) -> dict[str, Any]:
+    me_ = _user_only(request)
+    try:
+        return accounts.store().create_request(me_.user_id, kind=body.kind, reason=body.reason,
+                                               plan_id=body.plan_id, limit_key=body.limit_key,
+                                               amount=body.amount)
+    except AccountError as e:
+        _fail(e)
+
+
+@router.delete("/me/requests/{request_id}", status_code=204)
+def cancel_request(request_id: str, request: Request) -> None:
+    try:
+        accounts.store().cancel_request(_user_only(request).user_id, request_id)
+    except AccountError as e:
+        _fail(e, 404 if "No such" in str(e) else 400)
+
+
+@router.get("/requests")
+def list_requests(status: str | None = None) -> dict[str, Any]:
+    from brahmastra import usage
+
+    s = accounts.store()
+    out = []
+    for r in s.list_requests(status=status):
+        user = s.get_user(r["user_id"])
+        rows = usage.report(r["user_id"], user["role"]) if user else []
+        # This month's use against each monthly limit, so the decision is made on numbers.
+        r["usage"] = [x for x in rows if x["period"] == "month"]
+        r["current_plan"] = user["plan"] if user else None
+        out.append(r)
+    pending = sum(1 for r in out if r["status"] == "pending")
+    return {"requests": out, "pending": pending}
+
+
+@router.post("/requests/{request_id}/approve")
+def approve_request(request_id: str, body: Decision, request: Request) -> dict[str, Any]:
+    try:
+        return accounts.store().decide_request(request_id, approve=True, actor_id=_me(request).user_id,
+                                               actor=_actor(request), note=body.note, expires_at=body.expires_at)
+    except AccountError as e:
+        _fail(e, 404 if "No such" in str(e) else 403 if "own request" in str(e) else 400)
+
+
+@router.post("/requests/{request_id}/decline")
+def decline_request(request_id: str, body: Decision, request: Request) -> dict[str, Any]:
+    try:
+        return accounts.store().decide_request(request_id, approve=False, actor_id=_me(request).user_id,
+                                               actor=_actor(request), note=body.note)
+    except AccountError as e:
+        _fail(e, 404 if "No such" in str(e) else 403 if "own request" in str(e) else 400)
 
 
 @router.get("/audit")

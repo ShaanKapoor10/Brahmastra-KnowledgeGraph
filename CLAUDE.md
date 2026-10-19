@@ -154,6 +154,14 @@ failure each defence came from, and where to take this next.
   raises `BudgetExhausted` (a kind of `LLMQuotaExhausted`, never falls back to another
   provider), so notes stay pending and are retried. Company budget: admin Usage tab,
   capped by `TOKEN_BUDGET_DAY/_MONTH`. Token counts are provider-billed, not estimates.
+  Any provider call outside `llm.py` must check the budget and book its tokens itself
+  (extraction's Groq/Anthropic paths do); `tests/test_tokens.py` scans for violations.
+- **Upgrades** (`plan_requests`, `plan_grants`): people ask under `/auth/me/requests`,
+  admins decide under `/auth/requests`. Every limit is read through
+  `AccountStore.effective_limits` (plan + this day's/month's top-ups), so a top-up
+  cannot be missed. A time-limited plan reverts on the first lookup after its end
+  (`plan_id_for`, audited `plan.expire`). Nobody decides their own request or changes
+  their own plan while another admin exists.
 - **`uv sync` uninstalls the editable `brahmastra` package** from `backend/.venv`,
   and the Brahmastra plugin's MCP server then fails with "No module named
   'brahmastra'" (Claude Code launches it from the workspace root). After any sync:

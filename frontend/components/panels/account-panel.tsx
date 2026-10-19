@@ -9,6 +9,7 @@ import { useEffect, useState } from "react"
 import { BadgeCheck, Check, Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from "lucide-react"
 import { authApi, when, type ApiToken } from "@/lib/auth-api"
 import type { PlanCatalog, UsageRow } from "@/lib/plans"
+import { MyRequests } from "@/components/panels/plan-requests"
 import type { SignedInUser } from "@/components/dashboard"
 
 export function AccountPanel({ user }: { user: SignedInUser }) {
@@ -29,6 +30,7 @@ export function AccountPanel({ user }: { user: SignedInUser }) {
         </p>
       </header>
       <YourPlan planId={user.plan ?? null} />
+      <MyRequests planId={user.plan ?? null} />
       <Tokens />
       <ChangePassword />
     </div>
@@ -71,7 +73,7 @@ function YourPlan({ planId }: { planId: string | null }) {
         </div>
       )}
       <p className="text-xs text-muted-foreground">
-        Daily limits reset at midnight, monthly ones on the 1st. Ask an admin to change your plan.
+        Daily limits reset at midnight, monthly ones on the 1st. Need more? Ask below.
       </p>
     </Section>
   )

@@ -16,6 +16,7 @@ import type { SignedInUser } from "@/components/dashboard"
 import type { WorkspaceOption } from "@/components/workspace-switcher"
 import { buttonClass, CopyOnce, inputClass, Notice, Section } from "@/components/panels/account-panel"
 import type { Plan, PlanCatalog } from "@/lib/plans"
+import { PlanEditor, RequestQueue } from "@/components/panels/plan-requests"
 
 const ROLES: AccountUser["role"][] = ["viewer", "member", "admin"]
 const ROLE_HELP: Record<AccountUser["role"], string> = {
@@ -79,6 +80,8 @@ export function TeamPanel({ user, workspaces }: { user: SignedInUser; workspaces
         </p>
       </header>
 
+      <RequestQueue onDecided={load} />
+
       <AddPerson workspaces={workspaces} plans={plans} onCreated={(email, password) => {
         setSecret({ label: `Account created for ${email}. Give them this temporary password; it is shown only once.`, value: password })
         load()
@@ -112,6 +115,8 @@ export function TeamPanel({ user, workspaces }: { user: SignedInUser; workspaces
           </ul>
         )}
       </Section>
+
+      <PlanEditor />
 
       <AuditLog />
     </div>
@@ -243,6 +248,9 @@ function Person({ person, me, workspaces, plans, onChange, onPlan, onReset, onDe
           {plans.length === 0 && <option value={person.plan}>{person.plan}</option>}
           {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        {person.plan_expires_at && (
+          <span className="text-xs text-muted-foreground" title="Then back to their previous plan">until {when(person.plan_expires_at)}</span>
+        )}
         {person.role === "admin" ? (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <ShieldCheck className="h-3.5 w-3.5" /> every workspace

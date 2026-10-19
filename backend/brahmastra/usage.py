@@ -209,7 +209,7 @@ def _store() -> _Counters:
 def _limits_for(identity: Any) -> dict[str, Any]:
     from brahmastra.accounts import store
 
-    return store().plan_for(identity.user_id, identity.role)["limits"]
+    return store().effective_limits(identity.user_id, identity.role)
 
 
 def charge(identity: Any, meter: str, amount: int = 1) -> None:
@@ -271,7 +271,7 @@ def report(user_id: str, role: str) -> list[dict[str, Any]]:
     """Each limited meter's use this day and month, for the usage panel."""
     from brahmastra.accounts import store
 
-    limits = store().plan_for(user_id, role)["limits"]
+    limits = store().effective_limits(user_id, role)
     now = periods()
     totals = _store().totals(user_id, [now["day"][0], now["month"][0]])
     rows = []
@@ -420,7 +420,7 @@ def _person_limits(user_id: str) -> dict[str, Any] | None:
     from brahmastra.accounts import store
 
     user = store().get_user(user_id)
-    limits = store().plan_for(user_id, user["role"])["limits"] if user else None
+    limits = store().effective_limits(user_id, user["role"]) if user else None
     with _plan_cache_lock:
         _plan_cache[user_id] = (now, limits or {})
     return limits
@@ -541,7 +541,7 @@ def overview(days: int = 30) -> dict[str, Any]:
     people = []
     for u in accounts().list_users():
         mine = [r for r in in_month if r["who"] == u["id"]]
-        limits = accounts().plan_for(u["id"], u["role"])["limits"]
+        limits = accounts().effective_limits(u["id"], u["role"])
         units = {m: v for (m, p), v in _store().totals(u["id"], [now["month"][0]]).items()}
         today_tokens = sum(int(r["input"]) + int(r["output"]) + int(r["thoughts"])
                            for r in rows if r["who"] == u["id"] and r["day"] == today)
