@@ -136,6 +136,12 @@ OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
 # are billed as output, so GEMINI_THINKING_LEVEL (default "minimal") matters as
 # much as the model. Override per deployment with GEMINI_MODEL.
 GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# OpenCode Zen: an OpenAI-compatible gateway. This model is FREE "for a limited
+# time" and its provider is listed as zero-retention, no training -- unlike
+# several other free Zen models, whose data may be used to improve them. Check
+# opencode.ai/docs/zen before choosing another free model for real data.
+OPENCODE_DEFAULT_MODEL = "deepseek-v4.1-flash-free"
+OPENCODE_DEFAULT_BASE_URL = "https://opencode.ai/inference/openai/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +197,10 @@ _REGISTRY: tuple[Provider, ...] = (
              GEMINI_DEFAULT_MODEL),
     Provider("anthropic", "ANTHROPIC_API_KEY", "anthropic", "ANTHROPIC_MODEL",
              ANTHROPIC_DEFAULT_MODEL),
+    # Last of the cloud providers, so a key appearing in .env never makes it
+    # the fallback ahead of one already in use; LLM_PROVIDER=opencode selects it.
+    Provider("opencode", "OPENCODE_API_KEY", "openai", "OPENCODE_MODEL",
+             OPENCODE_DEFAULT_MODEL),
     Provider("ollama", "", "", "OLLAMA_MODEL", OLLAMA_MODEL),
 )
 
@@ -595,10 +605,11 @@ def _dispatch(
             system, user, json_mode=json_mode, json_schema=json_schema,
             temperature=temperature, max_tokens=max_tokens, retries=retries,
         )
-    if name == "openai":
+    if name == "openai" or name == "opencode":
         return _openai_chat(
             system, user, json_mode=json_mode, json_schema=json_schema,
             temperature=temperature, max_tokens=max_tokens, retries=retries,
+            provider=name,
         )
     if name == "gemini":
         return _gemini_chat(
@@ -621,9 +632,14 @@ def _openai_chat(
     temperature: float,
     max_tokens: int,
     retries: int,
+    provider: str = "openai",
 ) -> str:
     """
     OpenAI, through the same contract every other provider here honours.
+
+    Also OpenCode Zen (provider="opencode"): the same wire format at another
+    address, with its own key and model. Only those three differ, so it shares
+    this function rather than copying it.
 
     Same shape as _groq_chat on purpose -- Groq speaks the OpenAI wire format,
     so the only real differences are the client and the token parameter name.
@@ -638,8 +654,13 @@ def _openai_chat(
             "openai package not installed -- run: uv pip install openai"
         ) from e
 
-    client = OpenAI(api_key=_env("OPENAI_API_KEY", ""))
-    model = openai_model()
+    spec = provider_spec(provider)
+    base_url = None
+    if provider == "opencode":
+        base_url = _env("OPENCODE_BASE_URL", "") or OPENCODE_DEFAULT_BASE_URL
+    client = OpenAI(api_key=_env(spec.key_env, ""), base_url=base_url)
+    model = model_for(provider)
+    label = "OpenCode" if provider == "opencode" else "OpenAI"
     kwargs: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
@@ -662,20 +683,29 @@ def _openai_chat(
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(**kwargs)
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                completion = getattr(usage, "completion_tokens", 0) or 0
+                details = getattr(usage, "completion_tokens_details", None)
+                reasoning = getattr(details, "reasoning_tokens", 0) or 0
+                # OpenAI counts reasoning INSIDE completion_tokens; Gemini does
+                # not. Split it out so "output" means the same for both.
+                _record_tokens(provider, getattr(usage, "prompt_tokens", 0) or 0,
+                               completion - reasoning, reasoning)
             return resp.choices[0].message.content or ""
         except Exception as e:
             last_err = e
             if _is_quota_exhausted(e):
-                raise LLMQuotaExhausted(f"OpenAI quota exhausted: {e}") from e
+                raise LLMQuotaExhausted(f"{label} quota exhausted: {e}") from e
             if _is_model_missing(e):
                 raise LLMModelUnavailable(
-                    f"OpenAI model {model!r} is not available on this account. "
-                    f"Set OPENAI_MODEL in backend/.env to a current one. "
-                    f"Default is {OPENAI_DEFAULT_MODEL!r}. Original error: {e}"
+                    f"{label} model {model!r} is not available on this account. "
+                    f"Set {spec.model_env} in backend/.env to a current one. "
+                    f"Default is {spec.default_model!r}. Original error: {e}"
                 ) from e
             time.sleep(retry_delay(e, attempt))
 
-    raise LLMUnavailable(f"OpenAI request failed after {retries} attempts: {last_err}")
+    raise LLMUnavailable(f"{label} request failed after {retries} attempts: {last_err}")
 
 
 def _count_tokens(provider: str, usage: Any) -> None:
@@ -686,13 +716,20 @@ def _count_tokens(provider: str, usage: Any) -> None:
     """
     if usage is None:
         return
+    _record_tokens(provider,
+                   getattr(usage, "prompt_token_count", 0) or 0,
+                   getattr(usage, "candidates_token_count", 0) or 0,
+                   getattr(usage, "thoughts_token_count", 0) or 0)
+
+
+def _record_tokens(provider: str, input_tokens: int, output_tokens: int,
+                   thought_tokens: int) -> None:
+    """One place every provider reports billed tokens to. Never raises."""
     try:
         from brahmastra import metrics
 
-        for kind, field in (("input", "prompt_token_count"),
-                            ("output", "candidates_token_count"),
-                            ("thoughts", "thoughts_token_count")):
-            count = getattr(usage, field, None)
+        for kind, count in (("input", input_tokens), ("output", output_tokens),
+                            ("thoughts", thought_tokens)):
             if count:
                 metrics.LLM_TOKENS.labels(provider, kind).inc(count)
     except Exception:                                       # noqa: BLE001

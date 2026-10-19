@@ -58,6 +58,11 @@ dependencies = [
     # Gemini in a container failed at the first call with an ImportError: the
     # provider existed in llm.py but not in any image. Apache-2.0.
     "google-genai>=2.31.0",
+    # The OpenAI wire format, used by LLM_PROVIDER=openai and =opencode (OpenCode
+    # Zen serves DeepSeek and others behind an OpenAI-compatible endpoint).
+    # Undeclared until now, so the openai provider existed in llm.py but in no
+    # image -- the same gap google-genai had. Apache-2.0.
+    "openai>=3.35.1",
 ]
 
 [project.scripts]

@@ -172,7 +172,8 @@ def _isolate_storage_choice(monkeypatch):
                        # here would have handed every unstubbed test four live
                        # keys -- the same leak this block was written to close,
                        # reopened by a new variable nobody listed.
-                       "GROQ_API_KEYS", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+                       "GROQ_API_KEYS", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                       "OPENCODE_API_KEY"):
         monkeypatch.setenv(credential, "")
 
     # And the key pool's memory of which keys are resting. Module state

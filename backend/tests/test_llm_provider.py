@@ -376,3 +376,98 @@ def test_a_mistyped_thinking_level_fails_with_its_name(monkeypatch):
     monkeypatch.setenv("GEMINI_THINKING_LEVEL", "minimum")
     with pytest.raises(llm.LLMUnavailable, match="GEMINI_THINKING_LEVEL"):
         llm._gemini_chat("s", "u", json_mode=False, temperature=0.0, max_tokens=10, retries=1)
+
+
+# ---------------------------------------------------------------------------
+# OpenCode Zen: the OpenAI wire format at another address
+# ---------------------------------------------------------------------------
+
+def _fake_openai(monkeypatch, usage):
+    """A stand-in openai.OpenAI that records how it was built and called."""
+    import sys
+    import types as pytypes
+
+    seen: dict = {}
+
+    class _Completions:
+        def create(self, **kw):
+            seen["call"] = kw
+            msg = pytypes.SimpleNamespace(content='{"triples": []}')
+            return pytypes.SimpleNamespace(choices=[pytypes.SimpleNamespace(message=msg)],
+                                           usage=usage)
+
+    class _OpenAI:
+        def __init__(self, api_key, base_url=None):
+            seen["api_key"], seen["base_url"] = api_key, base_url
+            self.chat = pytypes.SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", pytypes.SimpleNamespace(OpenAI=_OpenAI))
+    return seen
+
+
+def test_opencode_reaches_the_zen_gateway_with_its_own_key_and_model(monkeypatch):
+    from brahmastra import llm
+
+    seen = _fake_openai(monkeypatch, None)
+    monkeypatch.setenv("OPENCODE_API_KEY", "oc-test-not-a-real-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-must-not-be-used")
+    monkeypatch.delenv("OPENCODE_MODEL", raising=False)
+    monkeypatch.delenv("OPENCODE_BASE_URL", raising=False)
+
+    reply = llm._dispatch("opencode", "system", "user", json_mode=True, json_schema=None,
+                          temperature=0.0, max_tokens=50, num_ctx=0, timeout=10, retries=1)
+
+    assert reply == '{"triples": []}'
+    assert seen["api_key"] == "oc-test-not-a-real-key"
+    assert seen["base_url"] == "https://opencode.ai/inference/openai/v1"
+    assert seen["call"]["model"] == "deepseek-v4.1-flash-free"
+    assert seen["call"]["response_format"] == {"type": "json_object"}
+
+
+def test_plain_openai_still_goes_to_openai(monkeypatch):
+    from brahmastra import llm
+
+    seen = _fake_openai(monkeypatch, None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    llm._dispatch("openai", "s", "u", json_mode=False, json_schema=None,
+                  temperature=0.0, max_tokens=10, num_ctx=0, timeout=10, retries=1)
+    assert seen["base_url"] is None
+    assert seen["call"]["model"] == llm.model_for("openai")
+
+
+def test_opencode_is_never_picked_just_because_its_key_appeared(monkeypatch):
+    """Registry order is the fallback order; OpenCode sits after every other
+    cloud provider, so it is reached only by LLM_PROVIDER=opencode."""
+    from brahmastra import llm
+
+    monkeypatch.setattr(llm, "provider_status",
+                        lambda: {p: p in ("groq", "opencode") for p in llm.PROVIDERS})
+    monkeypatch.setenv("LLM_PROVIDER", "")
+    assert llm.resolve_provider() == "groq"
+    monkeypatch.setenv("LLM_PROVIDER", "opencode")
+    assert llm.resolve_provider() == "opencode"
+
+
+def test_openai_style_reasoning_is_counted_as_thoughts_not_output(monkeypatch):
+    """OpenAI counts reasoning inside completion_tokens; Gemini keeps it apart.
+    Split here, "output" means the same thing for every provider."""
+    pytest.importorskip("prometheus_client")
+    import types as pytypes
+
+    from brahmastra import llm, metrics
+
+    usage = pytypes.SimpleNamespace(
+        prompt_tokens=900, completion_tokens=300,
+        completion_tokens_details=pytypes.SimpleNamespace(reasoning_tokens=120))
+    _fake_openai(monkeypatch, usage)
+    monkeypatch.setenv("OPENCODE_API_KEY", "oc-test-not-a-real-key")
+
+    def counted(kind: str) -> float:
+        return metrics.LLM_TOKENS.labels("opencode", kind)._value.get()
+
+    before = {k: counted(k) for k in ("input", "output", "thoughts")}
+    llm._dispatch("opencode", "s", "u", json_mode=False, json_schema=None,
+                  temperature=0.0, max_tokens=10, num_ctx=0, timeout=10, retries=1)
+    assert counted("input") - before["input"] == 900
+    assert counted("output") - before["output"] == 180
+    assert counted("thoughts") - before["thoughts"] == 120
