@@ -44,7 +44,7 @@ x-hardening: &hardening
 
 x-neo4j: &neo4j
   <<: *hardening
-  image: neo4j:5.26.2-community@sha256:099b9f74968c123209972835417985ed2a1cc19c0422c0753a313e26a736c365
+  image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
   cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
   environment:
     NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}
@@ -105,7 +105,7 @@ x-app-env: &app-env
 services:
   caddy:
     <<: *hardening
-    image: caddy:2.8.4-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
+    image: caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     # Binding 80/443 is the one privilege the edge needs.
     cap_add: [NET_BIND_SERVICE]
     read_only: true
@@ -291,7 +291,7 @@ services:
   prometheus:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     read_only: true
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -314,7 +314,7 @@ services:
   alertmanager:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
     read_only: true
     entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
     environment:
@@ -332,7 +332,7 @@ services:
   grafana:
     <<: *hardening
     profiles: ["monitoring"]
-    image: grafana/grafana-oss:11.3.1@sha256:147620479985b5780600dea24223c71eb8525e01727cce7fcd4bba8896d66d60
+    image: grafana/grafana-oss:13.0.2@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
     read_only: true
     environment:
       GF_SECURITY_ADMIN_USER: admin
@@ -357,7 +357,7 @@ services:
   node-exporter:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/node-exporter:v1.8.2@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706
+    image: prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     read_only: true
     command: ["--path.rootfs=/host"]
     pid: host
@@ -373,7 +373,7 @@ services:
   # hardening above (docs/OBSERVABILITY.md). It publishes nothing.
   cadvisor:
     profiles: ["monitoring"]
-    image: gcr.io/cadvisor/cadvisor:v0.49.1@sha256:3cde6faf0791ebf7b41d6f8ae7145466fed712ea6f252c935294d2608b1af388
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
     restart: unless-stopped
     logging: *logging
     privileged: true
