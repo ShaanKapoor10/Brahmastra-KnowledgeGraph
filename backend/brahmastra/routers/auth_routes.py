@@ -16,6 +16,8 @@ Accounts over HTTP: sign in, personal API tokens, and (for admins) users.
     DELETE /auth/users/{id}             admin
     POST   /auth/users/{id}/password    admin: set a new password (ends their sessions)
     GET    /auth/audit                  admin: recent account events
+    GET    /auth/plans                  every plan, with its features and limits
+    PUT    /auth/users/{id}/plan        admin: put someone on a plan (not yourself)
 
 Who may call what is decided in auth.required_role, not here, so these handlers
 never contain a permission check that a refactor could drop.
@@ -65,6 +67,7 @@ class NewUser(Credentials):
     name: str | None = Field(default=None, max_length=120)
     role: str = "member"
     workspaces: list[str] = Field(default_factory=list)
+    plan: str | None = Field(default=None, max_length=64)   # None: the role's plan
 
 
 class UserPatch(BaseModel):
@@ -72,6 +75,10 @@ class UserPatch(BaseModel):
     disabled: bool | None = None
     name: str | None = Field(default=None, max_length=120)
     workspaces: list[str] | None = None
+
+
+class PlanChoice(BaseModel):
+    plan_id: str = Field(..., min_length=1, max_length=64)
 
 
 class NewPassword(BaseModel):
@@ -209,7 +216,8 @@ def list_users() -> dict[str, Any]:
 def create_user(body: NewUser, request: Request) -> dict[str, Any]:
     try:
         return accounts.store().create_user(body.email, body.password, role=body.role, name=body.name,
-                                            workspaces=body.workspaces, actor=_actor(request))
+                                            workspaces=body.workspaces, actor=_actor(request),
+                                            plan=body.plan)
     except AccountError as e:
         _fail(e)
 
@@ -240,6 +248,23 @@ def reset_password(user_id: str, body: NewPassword, request: Request) -> None:
         s.set_password(user_id, body.password, actor=_actor(request))
     except AccountError as e:
         _fail(e)
+
+
+@router.get("/plans")
+def list_plans() -> dict[str, Any]:
+    from brahmastra.plans import FEATURES, LIMITS
+
+    return {"plans": accounts.store().list_plans(), "features": FEATURES, "limits": LIMITS}
+
+
+@router.put("/users/{user_id}/plan")
+def set_plan(user_id: str, body: PlanChoice, request: Request) -> dict[str, Any]:
+    me_ = _me(request)
+    try:
+        return accounts.store().set_user_plan(user_id, body.plan_id, actor_id=me_.user_id,
+                                              actor=_actor(request))
+    except AccountError as e:
+        _fail(e, 404 if "No such" in str(e) else 403)
 
 
 @router.get("/audit")

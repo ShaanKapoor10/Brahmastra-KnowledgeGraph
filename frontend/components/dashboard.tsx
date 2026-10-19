@@ -20,6 +20,8 @@ import { MeetingsPanel } from "@/components/panels/meetings-panel"
 import { DiagnosticsPanel } from "@/components/panels/diagnostics-panel"
 import { AccountPanel } from "@/components/panels/account-panel"
 import { TeamPanel } from "@/components/panels/team-panel"
+import { PlanLocked } from "@/components/plan-lock"
+import { can } from "@/lib/plans"
 import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users } from "lucide-react"
 
 type View =
@@ -49,6 +51,15 @@ export interface SignedInUser {
   name: string | null
   /** The workspaces this person may open; null means every workspace (admins). */
   workspaces?: string[] | null
+  /** Plan id, and the features it includes; features null means every feature. */
+  plan?: string | null
+  features?: string[] | null
+}
+
+/** The plan feature each view needs; views not listed need none. */
+const VIEW_FEATURE: Partial<Record<View, string>> = {
+  graph: "graph", ask: "ask", central: "graph", clusters: "graph", contradictions: "graph",
+  links: "graph", resolution: "graph",
 }
 
 interface Props {
@@ -352,7 +363,9 @@ export function Dashboard({
       {/* Body */}
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1 overflow-hidden">
-          {view === "graph" ? (
+          {VIEW_FEATURE[view] && !can(user, VIEW_FEATURE[view]!) ? (
+            <div className="mx-auto max-w-3xl px-4 py-5 sm:px-6"><PlanLocked feature={VIEW_FEATURE[view]!} /></div>
+          ) : view === "graph" ? (
             <GraphView
               graph={result.graph}
               clusters={result.clusters}
@@ -374,8 +387,8 @@ export function Dashboard({
                 )}
                 {view === "links" && <PredictedLinks links={result.predictedLinks} onSelect={select} />}
                 {view === "resolution" && <EntityResolution resolution={result.resolution} onSelect={select} />}
-                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} />}
-                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} />}
+                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} canAdd={can(user, "add_notes")} />}
+                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} canAdd={can(user, "meetings")} />}
                 {view === "diagnostics" && <DiagnosticsPanel workspace={workspace} backendAvailable={backendAvailable} />}
                 {view === "account" && user && <AccountPanel user={user} />}
                 {view === "team" && user?.role === "admin" && <TeamPanel user={user} workspaces={workspaces} />}

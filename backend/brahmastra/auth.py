@@ -29,6 +29,9 @@ WHO (first match wins):
 WHAT (`required_role`): viewers read, search and ask; members also write,
 ingest and run the pipeline; admins also manage users, keys and workspaces.
 
+PLAN: after the role, the person's plan must include the route's feature
+(plans.route_feature). A plan narrows what a role allows; it never widens it.
+
 WHERE: a non-admin may open only the workspaces they are a member of. The
 workspace is bound per request before this runs (main.bind_workspace), so the
 check here covers every route at once rather than relying on each router to
@@ -196,6 +199,14 @@ async def require_api_key(request: Request, call_next):
     need = required_role(request.method, path)
     if need and not identity.at_least(need):
         return _deny(403, f"This needs the {need} role; you are a {identity.role}.")
+
+    # The plan, AFTER the role: a plan can only narrow what a role allows.
+    from brahmastra.plans import refusal, route_feature
+
+    feature = route_feature(request.method, path)
+    if feature and not identity.has(feature):
+        return JSONResponse(status_code=403, content={"detail": refusal(feature), "code": "plan_feature",
+                                                      "feature": feature})
 
     if identity.user_id:
         from brahmastra import ratelimit

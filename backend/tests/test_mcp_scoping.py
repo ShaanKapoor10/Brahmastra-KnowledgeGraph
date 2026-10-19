@@ -95,7 +95,9 @@ def test_remote_mcp_tools_are_scoped_to_the_caller(mcp_app):
     admin = store.create_user("admin@example.com", PW, role="admin")
     member = store.create_user("mia@example.com", PW, role="member", workspaces=["alpha"])
     viewer = store.create_user("vic@example.com", PW, role="viewer", workspaces=["alpha"])
-    tok = {u["email"]: store.create_token(u["id"], "test")["token"] for u in (admin, member, viewer)}
+    # A member whose PLAN is narrower than her role: the role allows writing.
+    reader = store.create_user("rita@example.com", PW, role="member", workspaces=["alpha"], plan="reader")
+    tok = {u["email"]: store.create_token(u["id"], "test")["token"] for u in (admin, member, viewer, reader)}
 
     with TestClient(app, raise_server_exceptions=False) as client:
         # A member reads their own workspace through MCP...
@@ -131,6 +133,12 @@ def test_remote_mcp_tools_are_scoped_to_the_caller(mcp_app):
         assert "needs the member role" in vic.call("brahmastra_add_note", title="x", content="y")
         assert "needs the member role" in vic.call("brahmastra_run_pipeline")
         assert "needs the admin role" in mia.call("brahmastra_create_workspace", id="gamma", name="Gamma")
+
+        # Plans hold per tool as well: a Reader's assistant searches, but the
+        # plan refuses the note her role would allow.
+        rita = McpSession(client, tok["rita@example.com"], "alpha")
+        assert "Apollo" in rita.call("brahmastra_search_notes", query="Apollo")
+        assert "Add notes is not in your plan" in rita.call("brahmastra_add_note", title="x", content="y")
 
         # An admin sees every workspace.
         boss = McpSession(client, tok["admin@example.com"], "alpha")

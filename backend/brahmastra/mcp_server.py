@@ -159,7 +159,8 @@ def _denied(detail: str) -> str:
 
 
 def _scoped(need: str):
-    """Require `need` (viewer | member | admin) and membership of the workspace."""
+    """Require `need` (viewer | member | admin), the plan features the tool needs
+    (plans.TOOL_FEATURES), and membership of the workspace."""
     import functools
 
     def decorate(fn):
@@ -184,6 +185,13 @@ def _scoped(need: str):
                 return _denied(problem[1])
             if not identity.at_least(need):
                 return _denied(f"This tool needs the {need} role; you are a {identity.role}.")
+            # Checked per call, not only on connecting: a plan changed mid-session
+            # applies at the next call, as a revoked token does.
+            from brahmastra.plans import TOOL_FEATURES, refusal
+
+            for feature in ("mcp", TOOL_FEATURES.get(fn.__name__)):
+                if feature and not identity.has(feature):
+                    return _denied(refusal(feature))
             requested = (request.headers.get(WORKSPACE_HEADER)
                          or request.query_params.get("workspace") or "").strip()
             try:

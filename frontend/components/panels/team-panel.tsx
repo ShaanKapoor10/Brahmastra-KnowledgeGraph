@@ -15,6 +15,7 @@ import { authApi, temporaryPassword, when, type AccountUser, type AuditEntry } f
 import type { SignedInUser } from "@/components/dashboard"
 import type { WorkspaceOption } from "@/components/workspace-switcher"
 import { buttonClass, CopyOnce, inputClass, Notice, Section } from "@/components/panels/account-panel"
+import type { Plan, PlanCatalog } from "@/lib/plans"
 
 const ROLES: AccountUser["role"][] = ["viewer", "member", "admin"]
 const ROLE_HELP: Record<AccountUser["role"], string> = {
@@ -25,11 +26,22 @@ const ROLE_HELP: Record<AccountUser["role"], string> = {
 
 type Message = { tone: "ok" | "error"; text: string } | null
 
+/** The plan each role starts on (brahmastra/plans.py ROLE_PLAN). */
+const ROLE_PLAN_NAME: Record<AccountUser["role"], string> = {
+  viewer: "Reader", member: "Contributor", admin: "Unlimited",
+}
+
 export function TeamPanel({ user, workspaces }: { user: SignedInUser; workspaces: WorkspaceOption[] }) {
   const [people, setPeople] = useState<AccountUser[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<Message>(null)
   const [secret, setSecret] = useState<{ label: string; value: string } | null>(null)
+  const [plans, setPlans] = useState<Plan[]>([])
+  useEffect(() => {
+    let live = true
+    authApi<PlanCatalog>("/plans").then((c) => { if (live) setPlans(c.plans) }, () => {})
+    return () => { live = false }
+  }, [])
 
   // Bumped after every change; the effect below reloads on it.
   const [version, setVersion] = useState(0)
@@ -67,7 +79,7 @@ export function TeamPanel({ user, workspaces }: { user: SignedInUser; workspaces
         </p>
       </header>
 
-      <AddPerson workspaces={workspaces} onCreated={(email, password) => {
+      <AddPerson workspaces={workspaces} plans={plans} onCreated={(email, password) => {
         setSecret({ label: `Account created for ${email}. Give them this temporary password; it is shown only once.`, value: password })
         load()
       }} />
@@ -81,8 +93,10 @@ export function TeamPanel({ user, workspaces }: { user: SignedInUser; workspaces
         ) : (
           <ul className="divide-y divide-border">
             {people.map((p) => (
-              <Person key={p.id} person={p} me={user} workspaces={workspaces}
+              <Person key={p.id} person={p} me={user} workspaces={workspaces} plans={plans}
                       onChange={(patch, done) => act(() => authApi(`/users/${p.id}`, { method: "PATCH", json: patch }), done)}
+                      onPlan={(planId) => act(() => authApi(`/users/${p.id}/plan`, { method: "PUT", json: { plan_id: planId } }),
+                                              `${p.email} is now on ${plans.find((x) => x.id === planId)?.name ?? planId}.`)}
                       onReset={() => {
                         const password = temporaryPassword()
                         void act(async () => {
@@ -126,13 +140,14 @@ function WorkspacePicker({ all, chosen, onChange, disabled }: {
   )
 }
 
-function AddPerson({ workspaces, onCreated }: {
-  workspaces: WorkspaceOption[]; onCreated: (email: string, password: string) => void
+function AddPerson({ workspaces, plans, onCreated }: {
+  workspaces: WorkspaceOption[]; plans: Plan[]; onCreated: (email: string, password: string) => void
 }) {
   const [email, setEmail] = useState("")
   const [name, setName] = useState("")
   const [role, setRole] = useState<AccountUser["role"]>("member")
   const [chosen, setChosen] = useState<string[]>([])
+  const [plan, setPlan] = useState("")            // "": the role's own plan
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message>(null)
 
@@ -142,9 +157,10 @@ function AddPerson({ workspaces, onCreated }: {
     setMessage(null)
     const password = temporaryPassword()
     try {
-      await authApi("/users", { method: "POST", json: { email, name: name || null, role, password, workspaces: chosen } })
+      await authApi("/users", { method: "POST", json: { email, name: name || null, role, password, workspaces: chosen,
+                                                       plan: plan || null } })
       onCreated(email, password)
-      setEmail(""); setName(""); setChosen([]); setRole("member")
+      setEmail(""); setName(""); setChosen([]); setRole("member"); setPlan("")
     } catch (err) {
       setMessage({ tone: "error", text: (err as Error).message })
     } finally {
@@ -167,8 +183,13 @@ function AddPerson({ workspaces, onCreated }: {
                   className={inputClass}>
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
+          <label className="sr-only" htmlFor="new-plan">Plan</label>
+          <select id="new-plan" value={plan} onChange={(e) => setPlan(e.target.value)} className={inputClass}>
+            <option value="">plan: {ROLE_PLAN_NAME[role]} (the role&apos;s)</option>
+            {plans.map((p) => <option key={p.id} value={p.id}>plan: {p.name}</option>)}
+          </select>
         </div>
-        <p className="text-xs text-muted-foreground">{role}: {ROLE_HELP[role]}.</p>
+        <p className="text-xs text-muted-foreground">{role}: {ROLE_HELP[role]}. The plan decides which features and how much.</p>
         {role !== "admin" && (
           <div className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Workspaces they can open</span>
@@ -185,10 +206,12 @@ function AddPerson({ workspaces, onCreated }: {
   )
 }
 
-function Person({ person, me, workspaces, onChange, onReset, onDelete }: {
+function Person({ person, me, workspaces, plans, onChange, onPlan, onReset, onDelete }: {
   person: AccountUser
   me: SignedInUser
   workspaces: WorkspaceOption[]
+  plans: Plan[]
+  onPlan: (planId: string) => void
   onChange: (patch: Partial<Pick<AccountUser, "role" | "disabled" | "workspaces">>, done: string) => void
   onReset: () => void
   onDelete: () => void
@@ -212,6 +235,13 @@ function Person({ person, me, workspaces, onChange, onReset, onDelete }: {
                 onChange={(e) => onChange({ role: e.target.value as AccountUser["role"] }, `${person.email} is now ${e.target.value}.`)}
                 className={`${inputClass} py-1 text-xs`}>
           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <label className="sr-only" htmlFor={`plan-${person.id}`}>Plan for {person.email}</label>
+        <select id={`plan-${person.id}`} value={person.plan} onChange={(e) => onPlan(e.target.value)}
+                title={isMe ? "Another admin must change your plan, unless you are the only admin" : "Which features, and how much"}
+                className={`${inputClass} py-1 text-xs`}>
+          {plans.length === 0 && <option value={person.plan}>{person.plan}</option>}
+          {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         {person.role === "admin" ? (
           <span className="flex items-center gap-1 text-xs text-muted-foreground">

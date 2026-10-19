@@ -131,11 +131,25 @@ failure each defence came from, and where to take this next.
   `deploy/tests/edge-test.sh`.
 - **Startup refuses unsafe production config** (`preflight.py`, exit 78).
 - **Accounts and roles:** `accounts.py`, `auth.py`; dashboard **Team** (admins) and
-  **Account** tabs. Remote MCP is open to every role: each tool re-identifies the
+  **Account** tabs. Remote MCP is open to every role and every plan: each tool re-identifies the
   caller from its own HTTP request and checks role + workspace (`mcp_server._scoped`),
   because the middleware's contextvars are not guaranteed to reach MCP tools. The SDK's
   Host check is configured from PUBLIC_URL/DOMAIN (`MCP_ALLOWED_HOSTS` adds more).
   Rate limits that cost money are shared across workers (`rate_windows` table).
+- **Plans** (`plans.py`, branch `feat/plans`): a second check AFTER the role, never
+  instead of it: a plan only narrows what a role allows. Each person has one plan
+  (`user_plans`); plans are rows, seeded once (`AccountStore.ensure_plans`), and
+  everyone starts on their role's plan (viewer→Reader, member→Contributor,
+  admin→Unlimited), so introducing plans took nobody's access away. Every route is
+  either mapped to a feature (`route_feature`) or listed as deliberately exempt in
+  `tests/test_plans.py`, so a new route cannot slip past. MCP checks per tool
+  (`TOOL_FEATURES`). Limits are stored but not yet counted (phases B and C).
+- **`uv sync` uninstalls the editable `brahmastra` package** from `backend/.venv`,
+  and the Brahmastra plugin's MCP server then fails with "No module named
+  'brahmastra'" (Claude Code launches it from the workspace root). After any sync:
+  `uv pip install --python .venv/Scripts/python.exe --no-deps -e .`. And never sync
+  while MCP servers run: they hold numpy's DLLs, and a half-finished sync broke the
+  venv once. Use `uv add --no-sync`.
 - **CI and releases** (`.github/`, CONTRIBUTING.md): the only required check is
   `ci-success`. Python installs come from `backend/uv.lock` (`uv sync --frozen`,
   hash-checked; torch only from the CPU index). A `v*` tag on main makes signed

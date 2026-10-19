@@ -6,8 +6,9 @@
  * server keeps only its hash, so it cannot be shown again.
  */
 import { useEffect, useState } from "react"
-import { Check, Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from "lucide-react"
+import { BadgeCheck, Check, Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from "lucide-react"
 import { authApi, when, type ApiToken } from "@/lib/auth-api"
+import type { PlanCatalog } from "@/lib/plans"
 import type { SignedInUser } from "@/components/dashboard"
 
 export function AccountPanel({ user }: { user: SignedInUser }) {
@@ -27,9 +28,46 @@ export function AccountPanel({ user }: { user: SignedInUser }) {
           {user.email} · {user.role}
         </p>
       </header>
+      <YourPlan planId={user.plan ?? null} />
       <Tokens />
       <ChangePassword />
     </div>
+  )
+}
+
+function YourPlan({ planId }: { planId: string | null }) {
+  const [catalog, setCatalog] = useState<PlanCatalog | null>(null)
+  useEffect(() => {
+    let live = true
+    authApi<PlanCatalog>("/plans").then((c) => { if (live) setCatalog(c) }, () => {})
+    return () => { live = false }
+  }, [])
+  const plan = catalog?.plans.find((p) => p.id === planId)
+  if (!catalog || !plan) return null
+  const limits = Object.entries(plan.limits).filter(([key]) => !key.startsWith("tokens_"))
+  return (
+    <Section title={`Your plan: ${plan.name}`} icon={BadgeCheck}>
+      {plan.description && <p className="text-sm text-muted-foreground">{plan.description}</p>}
+      <ul className="grid gap-1 sm:grid-cols-2">
+        {Object.entries(catalog.features).map(([id, name]) => {
+          const on = plan.features.includes(id)
+          return (
+            <li key={id} className={`flex items-center gap-1.5 text-sm ${on ? "text-foreground" : "text-muted-foreground"}`}>
+              {on ? <Check className="h-3.5 w-3.5 text-primary" /> : <Lock className="h-3.5 w-3.5" />} {name}
+            </li>
+          )
+        })}
+      </ul>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 text-sm">
+        {limits.map(([key, value]) => (
+          <div key={key} className="contents">
+            <dt className="text-muted-foreground">{catalog.limits[key] ?? key}</dt>
+            <dd className="text-right font-mono tabular-nums text-foreground">{value == null ? "no limit" : value.toLocaleString()}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-xs text-muted-foreground">Usage against these limits is counted from the next release. Ask an admin to change your plan.</p>
+    </Section>
   )
 }
 

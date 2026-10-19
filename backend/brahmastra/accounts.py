@@ -47,6 +47,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import secrets
 import time
 import uuid
@@ -138,10 +139,17 @@ class Identity:
     name: str | None = None
     workspaces: frozenset[str] | None = None
     token_id: str | None = None
+    # The features this person's plan includes (plans.FEATURES); None means
+    # every feature -- the service key and anonymous development mode.
+    features: frozenset[str] | None = None
+    plan: str | None = None
     extra: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def at_least(self, role: str) -> bool:
         return _RANK[self.role] >= _RANK[role]
+
+    def has(self, feature: str) -> bool:
+        return self.features is None or feature in self.features
 
     def can_open(self, workspace_id: str) -> bool:
         return self.workspaces is None or workspace_id in self.workspaces
@@ -149,7 +157,9 @@ class Identity:
     def public(self) -> dict[str, Any]:
         return {"kind": self.kind, "role": self.role, "user_id": self.user_id, "email": self.email,
                 "name": self.name,
-                "workspaces": None if self.workspaces is None else sorted(self.workspaces)}
+                "workspaces": None if self.workspaces is None else sorted(self.workspaces),
+                "plan": self.plan,
+                "features": None if self.features is None else sorted(self.features)}
 
 
 SERVICE = Identity(kind="service", role="admin", name="service key")
@@ -198,6 +208,13 @@ class AccountStore(SidecarStore):
         target TEXT, detail TEXT, ip TEXT);
     CREATE TABLE IF NOT EXISTS login_failures (
         key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at DOUBLE PRECISION NOT NULL);
+    CREATE TABLE IF NOT EXISTS plans (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, features TEXT NOT NULL,
+        limits TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+        created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL);
+    CREATE TABLE IF NOT EXISTS user_plans (
+        user_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, assigned_by TEXT,
+        assigned_at DOUBLE PRECISION NOT NULL, expires_at DOUBLE PRECISION, return_plan_id TEXT);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
     CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens (user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log (at)
@@ -222,19 +239,29 @@ class AccountStore(SidecarStore):
         return int(self._q("SELECT COUNT(*) AS n FROM users", one=True)["n"])
 
     def create_user(self, email: str, password: str, role: str = "member", name: str | None = None,
-                    workspaces: list[str] | None = None, actor: str | None = None) -> dict[str, Any]:
+                    workspaces: list[str] | None = None, actor: str | None = None,
+                    plan: str | None = None) -> dict[str, Any]:
         email = _norm_email(email)
         if role not in ROLES:
             raise AccountError(f"Role must be one of {', '.join(ROLES)}.")
         check_password_strength(password)
         if self._q("SELECT id FROM users WHERE email = ?", (email,), one=True):
             raise AccountError("A user with that email already exists.")
+        if plan is not None and self.get_plan(plan) is None:
+            raise AccountError("No such plan.")
+        # Before the insert: seeding maps EXISTING users by role, and this
+        # person is new, so they must get the new-user plan instead.
+        self.ensure_plans()
         uid = uuid.uuid4().hex
         self._q("INSERT INTO users (id, email, name, password_hash, role, disabled, created_at) "
                 "VALUES (?, ?, ?, ?, ?, 0, ?)", (uid, email, name, hash_password(password), role, time.time()))
         for ws in workspaces or []:
             self.add_member(uid, ws)
-        self.audit(actor, "user.create", email, f"role={role}")
+        from brahmastra.plans import plan_for_new_user
+
+        self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)",
+                (uid, plan or plan_for_new_user(role), actor, time.time()))
+        self.audit(actor, "user.create", email, f"role={role}, plan={plan or plan_for_new_user(role)}")
         return self._require_user(uid)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
@@ -243,6 +270,7 @@ class AccountStore(SidecarStore):
         if u:
             u["disabled"] = bool(u["disabled"])
             u["workspaces"] = self.member_workspaces(user_id)
+            u["plan"] = self.plan_id_for(user_id, u["role"])
         return u
 
     def _require_user(self, user_id: str) -> dict[str, Any]:
@@ -303,6 +331,7 @@ class AccountStore(SidecarStore):
         self.revoke_all(user_id)
         self._q("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
         self._q("DELETE FROM workspace_members WHERE user_id = ?", (user_id,))
+        self._q("DELETE FROM user_plans WHERE user_id = ?", (user_id,))
         self._q("DELETE FROM users WHERE id = ?", (user_id,))
         self.audit(actor, "user.delete", user["email"])
 
@@ -441,8 +470,89 @@ class AccountStore(SidecarStore):
         if not u or u["disabled"]:
             return None
         ws = None if u["role"] == "admin" else frozenset(self.member_workspaces(user_id))
+        plan = self.plan_for(user_id, u["role"])
         return Identity(kind=kind, role=u["role"], user_id=u["id"], email=u["email"], name=u["name"],
-                        workspaces=ws, token_id=token_id)
+                        workspaces=ws, token_id=token_id, plan=plan["id"],
+                        features=frozenset(plan["features"]))
+
+    # -- plans (see plans.py for what they mean)
+    def ensure_plans(self) -> None:
+        """Create the starting plans once, and give every existing person the plan
+        matching their role, so introducing plans takes nobody's access away.
+
+        Runs only while the plans table is empty. Every insert ignores a row that
+        is already there, so two workers starting at once cannot double it.
+        """
+        if self._q("SELECT id FROM plans LIMIT 1", one=True):
+            return
+        from brahmastra.plans import DEFAULT_PLANS, ROLE_PLAN
+
+        now = time.time()
+        for position, plan in enumerate(DEFAULT_PLANS):
+            self._q("INSERT INTO plans (id, name, description, features, limits, position, created_at, "
+                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+                    (plan["id"], plan["name"], plan["description"], json.dumps(plan["features"]),
+                     json.dumps(plan["limits"]), position, now, now))
+        for u in self._q("SELECT id, role FROM users", rows=True):
+            self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
+                    (u["id"], ROLE_PLAN.get(u["role"], "reader"), "rollout", now))
+        self.audit("system", "plans.seed", None, ", ".join(p["id"] for p in DEFAULT_PLANS))
+
+    @staticmethod
+    def _plan_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {"id": row["id"], "name": row["name"], "description": row["description"],
+                "features": json.loads(row["features"]), "limits": json.loads(row["limits"])}
+
+    def list_plans(self) -> list[dict[str, Any]]:
+        self.ensure_plans()
+        return [self._plan_row(r) for r in self._q("SELECT * FROM plans ORDER BY position, id", rows=True)]
+
+    def get_plan(self, plan_id: str) -> dict[str, Any] | None:
+        self.ensure_plans()
+        row = self._q("SELECT * FROM plans WHERE id = ?", (plan_id,), one=True)
+        return self._plan_row(row) if row else None
+
+    def plan_id_for(self, user_id: str, role: str) -> str:
+        """The plan a person is on. No row (a user created before plans by some
+        path that missed the rollout) falls back to the role's plan."""
+        from brahmastra.plans import ROLE_PLAN
+
+        self.ensure_plans()
+        row = self._q("SELECT plan_id FROM user_plans WHERE user_id = ?", (user_id,), one=True)
+        return row["plan_id"] if row else ROLE_PLAN.get(role, "reader")
+
+    def plan_for(self, user_id: str, role: str) -> dict[str, Any]:
+        plan = self.get_plan(self.plan_id_for(user_id, role))
+        if plan is None:
+            # The plan was deleted out from under the person: the least plan,
+            # never an error that locks them out of reading.
+            from brahmastra.plans import DEFAULT_PLANS
+
+            plan = dict(DEFAULT_PLANS[0])
+        return plan
+
+    def set_user_plan(self, user_id: str, plan_id: str, *, actor_id: str | None,
+                      actor: str | None) -> dict[str, Any]:
+        """Put a person on a plan. Nobody changes their own plan, so every upgrade
+        has a second person behind it -- except a sole admin, who has nobody to
+        ask; the audit log records that it was self-assigned."""
+        user = self.get_user(user_id)
+        if not user:
+            raise AccountError("No such user.")
+        plan = self.get_plan(plan_id)
+        if not plan:
+            raise AccountError("No such plan.")
+        self_assigned = actor_id is not None and actor_id == user_id
+        if self_assigned and self._active_admins() > 1:
+            raise AccountError("You cannot change your own plan; ask another admin.")
+        before = user["plan"]
+        self._q("DELETE FROM user_plans WHERE user_id = ?", (user_id,))
+        self._q("INSERT INTO user_plans (user_id, plan_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)",
+                (user_id, plan_id, actor, time.time()))
+        self.audit(actor, "plan.assign", user["email"],
+                   f"{before} -> {plan_id}" + (" (self-assigned: sole admin)" if self_assigned else ""))
+        return self._require_user(user_id)
 
     # -- audit
     def audit(self, actor: str | None, action: str, target: str | None = None, detail: str = "",
