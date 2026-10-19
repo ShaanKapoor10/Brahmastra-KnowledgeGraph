@@ -143,7 +143,17 @@ failure each defence came from, and where to take this next.
   admin→Unlimited), so introducing plans took nobody's access away. Every route is
   either mapped to a feature (`route_feature`) or listed as deliberately exempt in
   `tests/test_plans.py`, so a new route cannot slip past. MCP checks per tool
-  (`TOOL_FEATURES`). Limits are stored but not yet counted (phases B and C).
+  (`TOOL_FEATURES`).
+- **Usage and tokens** (`usage.py`): units (questions, notes, words, meeting
+  minutes) are charged where they ENTER (middleware for /ask, POST /notes, MCP
+  add_note, ingest routes), atomically, per day and month in `TZ`. Every billed
+  token goes through `llm._record_tokens` to `usage.record_tokens`, booked to whoever
+  the work is for: the request's person, a note's AUTHOR (`note_authors`, set in
+  `db.upsert_note`) even in a background run, a meeting's submitter, or `ws:<id>` for
+  shared graph work (`usage.charging`). `llm._check_budget` runs before EVERY call and
+  raises `BudgetExhausted` (a kind of `LLMQuotaExhausted`, never falls back to another
+  provider), so notes stay pending and are retried. Company budget: admin Usage tab,
+  capped by `TOKEN_BUDGET_DAY/_MONTH`. Token counts are provider-billed, not estimates.
 - **`uv sync` uninstalls the editable `brahmastra` package** from `backend/.venv`,
   and the Brahmastra plugin's MCP server then fails with "No module named
   'brahmastra'" (Claude Code launches it from the workspace root). After any sync:

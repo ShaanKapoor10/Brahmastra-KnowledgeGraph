@@ -815,8 +815,15 @@ def extract_note(note: dict[str, Any]) -> dict[str, Any]:
     Returns {"triples_added": N, "triples_skipped": M, "error": None|str}
     """
     note_id = note["id"]
+    from brahmastra import usage
+
     try:
-        raw = _extract_with_llm(note["title"], note["content"])
+        # Charged to whoever added the note, even when a background run reads
+        # it; a note nobody added through a request (a sync, a meeting record)
+        # is charged to the workspace.
+        author = usage.author_of(note_id)
+        with usage.charging(user_id=author, purpose="note"):
+            raw = _extract_with_llm(note["title"], note["content"])
     except Exception as e:
         db.mark_note_error(note_id, str(e))
         return {"triples_added": 0, "triples_skipped": 0, "error": str(e)}

@@ -20,13 +20,14 @@ import { MeetingsPanel } from "@/components/panels/meetings-panel"
 import { DiagnosticsPanel } from "@/components/panels/diagnostics-panel"
 import { AccountPanel } from "@/components/panels/account-panel"
 import { TeamPanel } from "@/components/panels/team-panel"
+import { UsagePanel } from "@/components/panels/usage-panel"
 import { PlanLocked } from "@/components/plan-lock"
 import { can } from "@/lib/plans"
-import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users } from "lucide-react"
+import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users, Gauge } from "lucide-react"
 
 type View =
   | "graph" | "ask" | "central" | "clusters" | "contradictions" | "links" | "resolution" | "notes"
-  | "meetings" | "diagnostics" | "account" | "team"
+  | "meetings" | "diagnostics" | "account" | "team" | "usage"
 
 const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "graph", label: "Graph", icon: Network },
@@ -41,6 +42,7 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
   { id: "account", label: "Account", icon: UserCog },
   { id: "team", label: "Team", icon: Users },
+  { id: "usage", label: "Usage", icon: Gauge },
 ]
 
 /** Who is signed in, as GET /auth/me returns it. */
@@ -330,7 +332,7 @@ export function Dashboard({
           {TABS.filter((t) =>
             // Account needs someone signed in; Team is for admins. The backend
             // refuses the calls either way -- this only hides tabs that would fail.
-            t.id === "account" ? Boolean(user) : t.id === "team" ? user?.role === "admin" : true,
+            t.id === "account" ? Boolean(user) : t.id === "team" || t.id === "usage" ? user?.role === "admin" : true,
           ).map((t) => {
             const Icon = t.icon
             const active = view === t.id
@@ -376,7 +378,7 @@ export function Dashboard({
           ) : (
             <div className="h-full overflow-y-auto px-4 py-5 sm:px-6">
               {/* Meetings and Diagnostics lay out side by side; the rest read as one column. */}
-              <div className={`mx-auto ${view === "meetings" || view === "diagnostics" ? "max-w-6xl" : "max-w-3xl"}`}>
+              <div className={`mx-auto ${view === "meetings" || view === "diagnostics" || view === "usage" ? "max-w-6xl" : "max-w-3xl"}`}>
                 {view === "ask" && <AskPanel backendAvailable={backendAvailable} />}
                 {view === "central" && (
                   <CentralEntities central={result.central} onSelect={select} selected={selected} />
@@ -392,6 +394,7 @@ export function Dashboard({
                 {view === "diagnostics" && <DiagnosticsPanel workspace={workspace} backendAvailable={backendAvailable} />}
                 {view === "account" && user && <AccountPanel user={user} />}
                 {view === "team" && user?.role === "admin" && <TeamPanel user={user} workspaces={workspaces} />}
+                {view === "usage" && user?.role === "admin" && <UsagePanel />}
               </div>
             </div>
           )}

@@ -67,13 +67,16 @@ def _summarise_one(members: list[str], internal_edges: list[dict[str, Any]]) -> 
     """
     import json
 
-    raw = chat(
-        SYSTEM_PROMPT,
-        _build_user_message(members, internal_edges),
-        json_mode=True,
-        temperature=0.2,
-        timeout=120,
-    )
+    from brahmastra import usage
+
+    with usage.charging(purpose="summary"):
+        raw = chat(
+            SYSTEM_PROMPT,
+            _build_user_message(members, internal_edges),
+            json_mode=True,
+            temperature=0.2,
+            timeout=120,
+        )
     try:
         data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
         summary = " ".join(str(data.get("summary") or "").split())

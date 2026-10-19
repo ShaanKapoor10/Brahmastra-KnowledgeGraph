@@ -18,6 +18,11 @@ Accounts over HTTP: sign in, personal API tokens, and (for admins) users.
     GET    /auth/audit                  admin: recent account events
     GET    /auth/plans                  every plan, with its features and limits
     GET    /auth/usage                  my use this day and month against my plan's limits
+    GET    /auth/usage/overview         admin: tokens by day, person, workspace, purpose, model
+    GET    /auth/usage/users/{id}       admin: one person's daily history
+    GET    /auth/usage/export.csv       admin: this month's people table as CSV
+    GET    /auth/usage/budget           admin: the company's token budgets
+    PUT    /auth/usage/budget           admin: set them (capped by TOKEN_BUDGET_DAY/_MONTH)
     PUT    /auth/users/{id}/plan        admin: put someone on a plan (not yourself)
 
 Who may call what is decided in auth.required_role, not here, so these handlers
@@ -76,6 +81,11 @@ class UserPatch(BaseModel):
     disabled: bool | None = None
     name: str | None = Field(default=None, max_length=120)
     workspaces: list[str] | None = None
+
+
+class Budget(BaseModel):
+    tokens_day: int | None = Field(default=None, ge=0)
+    tokens_month: int | None = Field(default=None, ge=0)
 
 
 class PlanChoice(BaseModel):
@@ -266,6 +276,60 @@ def my_usage(request: Request) -> dict[str, Any]:
     if not me_.user_id:
         return {"plan": None, "usage": []}
     return {"plan": me_.plan, "usage": usage.report(me_.user_id, me_.role)}
+
+
+@router.get("/usage/overview")
+def usage_overview(days: int = 30) -> dict[str, Any]:
+    from brahmastra import usage
+
+    return usage.overview(days)
+
+
+@router.get("/usage/users/{user_id}")
+def usage_person(user_id: str, days: int = 30) -> dict[str, Any]:
+    from brahmastra import usage
+
+    if not accounts.store().get_user(user_id):
+        raise HTTPException(404, "No such user.")
+    return usage.person(user_id, days)
+
+
+@router.get("/usage/export.csv")
+def usage_export() -> Any:
+    import csv
+    import io
+
+    from fastapi.responses import Response
+
+    from brahmastra import usage
+
+    data = usage.overview(1)
+    out = io.StringIO()
+    fields = ["email", "name", "plan", "role", "questions", "notes", "words", "meeting_hours",
+              "input", "output", "thoughts", "tokens", "calls", "cost"]
+    writer = csv.DictWriter(out, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in data["people"]:
+        writer.writerow({**row, "cost": row["cost"] if row["priced"] else ""})
+    return Response(out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="brahmastra-usage-{data["month"]}.csv"'})
+
+
+@router.get("/usage/budget")
+def get_budget() -> dict[str, Any]:
+    from brahmastra import usage
+
+    return usage.company_budget()
+
+
+@router.put("/usage/budget")
+def put_budget(body: Budget, request: Request) -> dict[str, Any]:
+    from brahmastra import usage
+
+    out = usage.set_company_budget(body.tokens_day, body.tokens_month)
+    accounts.store().audit(_actor(request), "budget.set", "company",
+                           f"day={out['day']}, month={out['month']}")
+    return out
 
 
 @router.put("/users/{user_id}/plan")

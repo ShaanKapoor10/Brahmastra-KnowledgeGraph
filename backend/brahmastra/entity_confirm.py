@@ -464,7 +464,9 @@ def confirm(pairs: Iterable[tuple[str, str]],
     `context` maps a name to sentences it was used in (see `_render`)."""
     from brahmastra.llm import resolution_model_setting, using_model
 
-    with using_model(resolution_model_setting()):
+    from brahmastra import usage
+
+    with using_model(resolution_model_setting()), usage.charging(purpose="resolution"):
         return _confirm(pairs, context)
 
 

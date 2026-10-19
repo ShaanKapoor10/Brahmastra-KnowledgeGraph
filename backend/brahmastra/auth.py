@@ -40,6 +40,7 @@ remember -- a guard at one caller is not a guard.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import os
 import time
@@ -59,7 +60,9 @@ _OPEN_PATHS = frozenset({"/health", "/health/ready", "/health/uptime", "/livez",
 # Routes that act on accounts rather than on a workspace's data.
 _WORKSPACE_FREE_PREFIXES = ("/auth/", "/workspaces")
 
-_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys")
+# "/auth/usage/" (with the slash) is the admin Usage tab; "/auth/usage" alone
+# is a person's own usage and stays self-service.
+_ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys", "/auth/usage/")
 _SELF_SERVICE_PREFIXES = ("/auth/me", "/auth/logout", "/auth/password", "/auth/tokens")
 # POSTs a viewer may make: they read and spend, but change nothing stored.
 _VIEWER_POSTS = frozenset({"/ask"})
@@ -213,10 +216,15 @@ async def require_api_key(request: Request, call_next):
     # if the answer fails. Notes and meetings are counted where they enter,
     # because their size is in the request body.
     charged = False
-    if identity.user_id and request.method == "POST" and path == "/ask":
+    asking = request.method == "POST" and path == "/ask"
+    if identity.user_id and asking:
         from brahmastra import usage
 
         try:
+            # A spent token budget refuses the question before it is counted.
+            problem = await run_in_threadpool(usage.budget_problem, identity.user_id)
+            if problem:
+                return JSONResponse(status_code=429, content={"detail": problem, "code": "token_budget"})
             await run_in_threadpool(usage.charge, identity, "questions")
             charged = True
         except usage.LimitReached as e:
@@ -245,8 +253,12 @@ async def require_api_key(request: Request, call_next):
 
     request.state.identity = identity
     token = bind_identity(identity)
+    from brahmastra import usage
+
+    purpose = usage.charging(purpose="ask") if asking else contextlib.nullcontext()
     try:
-        response = await call_next(request)
+        with purpose:
+            response = await call_next(request)
     except Exception:
         # A route that raises reaches here as an exception, not as a 500.
         if charged:

@@ -22,7 +22,7 @@ export interface PlanCatalog {
 
 /** One limit's use, as GET /auth/usage returns it. */
 export interface UsageRow {
-  meter: "questions" | "notes" | "words" | "meeting_minutes"
+  meter: "questions" | "notes" | "words" | "meeting_minutes" | "tokens"
   period: "day" | "month"
   limit_key: string
   /** Meeting minutes arrive already converted to hours. */

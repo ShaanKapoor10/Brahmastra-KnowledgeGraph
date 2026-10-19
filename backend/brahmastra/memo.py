@@ -223,6 +223,7 @@ def load(key: str) -> str | None:
     hit = _local.get(slot)
     if hit is not None:
         _local.move_to_end(slot)
+        _count_hit()
         return hit
     try:
         reply = _store().get(key)
@@ -230,7 +231,18 @@ def load(key: str) -> str | None:
         return None
     if reply:
         _remember(key, reply)
+        _count_hit()
     return reply
+
+
+def _count_hit() -> None:
+    """A call the cache saved, for the admin Usage tab. Never raises."""
+    try:
+        from brahmastra import usage
+
+        usage.record_cache_hit()
+    except Exception:                                       # noqa: BLE001
+        pass
 
 
 def save(key: str, reply: str, variant: str = "") -> None:

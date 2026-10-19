@@ -363,8 +363,32 @@ def _is_quota_exhausted(exc: Exception) -> bool:
         return False
     return any(
         marker in text
-        for marker in ("per day", "tokens per day", "(tpd)", "requests per day", "rpd")
+        for marker in ("per day", "tokens per day", "(tpd)", "requests per day", "rpd", "token budget")
     )
+
+
+class BudgetExhausted(LLMQuotaExhausted):
+    """
+    The company's or a person's TOKEN BUDGET is spent (usage.budget_problem).
+
+    A kind of LLMQuotaExhausted so every caller's handling for a spent quota
+    applies as it is -- notes stay pending and are retried, a run stops
+    cleanly -- and worded with "429 ... token budget" so code that classifies
+    the message (extraction._is_quota_error) agrees. Unlike a provider's quota
+    it never falls back to another provider: the budget is the company's.
+    """
+
+
+def _check_budget() -> None:
+    """Refuse an AI call before it starts when the budget it would use is spent."""
+    try:
+        from brahmastra import usage
+
+        problem = usage.budget_problem()
+    except Exception:                                       # noqa: BLE001
+        return          # the meter is unreachable: never let it take AI down
+    if problem:
+        raise BudgetExhausted(f"429 token budget spent: {problem}")
 
 
 def _is_model_missing(exc: Exception) -> bool:
@@ -552,12 +576,15 @@ def _chat_unmeasured(
     # transient 429, which the retry loop already handles, and not on a bad
     # request, which would fail identically everywhere. `provider=` pins a
     # choice explicitly, so an explicit pin is never second-guessed.
+    _check_budget()
     if provider is None:
         try:
             return _dispatch(name, system, user, json_mode=json_mode,
                              json_schema=json_schema,
                              temperature=temperature, max_tokens=max_tokens,
                              num_ctx=num_ctx, timeout=timeout, retries=retries)
+        except BudgetExhausted:
+            raise
         except LLMQuotaExhausted:
             fallback = _next_usable_provider(name)
             if fallback is None:
@@ -730,7 +757,8 @@ def _record_openai_usage(provider: str, usage: Any) -> None:
 
 def _record_tokens(provider: str, input_tokens: int, output_tokens: int,
                    thought_tokens: int) -> None:
-    """One place every provider reports billed tokens to. Never raises."""
+    """One place every provider reports billed tokens to: the metrics, and the
+    usage ledger that budgets and the admin Usage tab read. Never raises."""
     try:
         from brahmastra import metrics
 
@@ -738,6 +766,12 @@ def _record_tokens(provider: str, input_tokens: int, output_tokens: int,
                             ("thoughts", thought_tokens)):
             if count:
                 metrics.LLM_TOKENS.labels(provider, kind).inc(count)
+    except Exception:                                       # noqa: BLE001
+        pass
+    try:
+        from brahmastra import usage
+
+        usage.record_tokens(provider, model_for(provider), input_tokens, output_tokens, thought_tokens)
     except Exception:                                       # noqa: BLE001
         pass
 
