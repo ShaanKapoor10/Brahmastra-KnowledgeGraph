@@ -65,6 +65,9 @@ LLM_LATENCY = Histogram("brahmastra_llm_call_duration_seconds", "LLM call latenc
                         buckets=LLM_BUCKETS)
 LLM_CHARS = Counter("brahmastra_llm_chars_total", "Characters sent to and received from LLMs (tokens ~ chars/4).",
                     ["provider", "direction"])
+LLM_TOKENS = Counter("brahmastra_llm_tokens_total",
+                     "Tokens the provider reports billing: input, output and thoughts (billed as output).",
+                     ["provider", "kind"])
 PIPELINE_RUNS = Counter("brahmastra_pipeline_runs_total", "Pipeline runs by mode and outcome.", ["mode", "status"])
 PIPELINE_STAGE = Histogram("brahmastra_pipeline_stage_duration_seconds", "Pipeline stage durations.", ["stage"],
                            buckets=STAGE_BUCKETS)

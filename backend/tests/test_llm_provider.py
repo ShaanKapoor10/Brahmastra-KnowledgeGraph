@@ -227,7 +227,7 @@ def test_a_model_can_be_overridden_per_provider(monkeypatch):
     monkeypatch.setenv("GEMINI_MODEL", "gemini-3-pro")
     assert model_for("gemini") == "gemini-3-pro"
     monkeypatch.setenv("GEMINI_MODEL", "")          # present-but-empty is unset
-    assert model_for("gemini") == "gemini-2.5-flash"
+    assert model_for("gemini") == "gemini-3.5-flash-lite"
 
 
 def test_active_model_follows_whichever_provider_is_live(monkeypatch):
@@ -281,3 +281,98 @@ def test_extraction_reaches_a_new_provider_without_its_own_code(monkeypatch):
 
     assert extraction._extract_with_llm("T", "C") == []
     assert seen["provider"] == "gemini"
+
+
+# ---------------------------------------------------------------------------
+# Gemini: thinking is billed, so it is pinned and counted
+# ---------------------------------------------------------------------------
+
+def _fake_genai(monkeypatch, usage):
+    """A stand-in google.genai that records the config it was called with."""
+    import sys
+    import types as pytypes
+
+    seen: dict = {}
+
+    class _Config:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    class _Thinking:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class _Models:
+        def generate_content(self, *, model, contents, config):
+            seen["model"] = model
+            return pytypes.SimpleNamespace(text='{"triples": []}', usage_metadata=usage)
+
+    class _Client:
+        def __init__(self, api_key):
+            self.models = _Models()
+
+    def _level(value):
+        if value not in ("MINIMAL", "LOW", "MEDIUM", "HIGH"):
+            raise ValueError(value)
+        return value
+
+    gtypes = pytypes.SimpleNamespace(GenerateContentConfig=_Config, ThinkingConfig=_Thinking,
+                                     ThinkingLevel=_level)
+    genai = pytypes.SimpleNamespace(Client=_Client, types=gtypes)
+    google = pytypes.SimpleNamespace(genai=genai)
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.genai", genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", gtypes)
+    return seen
+
+
+def test_gemini_pins_thinking_to_minimal_and_counts_thought_tokens(monkeypatch):
+    """
+    Gemini bills thinking as output, and 3.x models think by default. Unpinned,
+    every extraction pays for reasoning nobody reads -- and LLM_CHARS cannot
+    see it, because thoughts are not in the reply text.
+    """
+    pytest.importorskip("prometheus_client")
+    import types as pytypes
+
+    from brahmastra import llm, metrics
+
+    usage = pytypes.SimpleNamespace(prompt_token_count=1200, candidates_token_count=80,
+                                    thoughts_token_count=15)
+    seen = _fake_genai(monkeypatch, usage)
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    def counted(kind: str) -> float:
+        return metrics.LLM_TOKENS.labels("gemini", kind)._value.get()
+
+    before = {k: counted(k) for k in ("input", "output", "thoughts")}
+    reply = llm._gemini_chat("system", "user", json_mode=True, temperature=0.0,
+                             max_tokens=100, retries=1)
+
+    assert reply == '{"triples": []}'
+    assert seen["model"] == "gemini-3.5-flash-lite"
+    assert seen["response_mime_type"] == "application/json"
+    assert seen["thinking_config"].kw == {"thinking_level": "MINIMAL"}
+    assert counted("input") - before["input"] == 1200
+    assert counted("output") - before["output"] == 80
+    assert counted("thoughts") - before["thoughts"] == 15
+
+
+def test_gemini_thinking_setting_can_be_left_out(monkeypatch):
+    """3.8 Flash has no "minimal" level: "off" must send no setting at all."""
+    from brahmastra import llm
+
+    seen = _fake_genai(monkeypatch, None)
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "off")
+    llm._gemini_chat("s", "u", json_mode=False, temperature=0.0, max_tokens=10, retries=1)
+    assert "thinking_config" not in seen
+
+
+def test_a_mistyped_thinking_level_fails_with_its_name(monkeypatch):
+    from brahmastra import llm
+
+    _fake_genai(monkeypatch, None)
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "minimum")
+    with pytest.raises(llm.LLMUnavailable, match="GEMINI_THINKING_LEVEL"):
+        llm._gemini_chat("s", "u", json_mode=False, temperature=0.0, max_tokens=10, retries=1)

@@ -130,7 +130,12 @@ OLLAMA_HOST = _env("OLLAMA_HOST", "http://localhost:11434")
 GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+# The smallest stable Gemini whose thinking can be pinned to minimal. Was
+# gemini-2.5-flash, which Google now serves only to accounts that used it
+# before -- a new company key could not be relied on to get it. Thinking tokens
+# are billed as output, so GEMINI_THINKING_LEVEL (default "minimal") matters as
+# much as the model. Override per deployment with GEMINI_MODEL.
+GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +678,27 @@ def _openai_chat(
     raise LLMUnavailable(f"OpenAI request failed after {retries} attempts: {last_err}")
 
 
+def _count_tokens(provider: str, usage: Any) -> None:
+    """Record the tokens a provider says it billed, thoughts included.
+
+    LLM_CHARS only estimates (chars / 4) and cannot see thinking at all, which
+    is billed as output. Never raises: a missing field is not worth a failed call.
+    """
+    if usage is None:
+        return
+    try:
+        from brahmastra import metrics
+
+        for kind, field in (("input", "prompt_token_count"),
+                            ("output", "candidates_token_count"),
+                            ("thoughts", "thoughts_token_count")):
+            count = getattr(usage, field, None)
+            if count:
+                metrics.LLM_TOKENS.labels(provider, kind).inc(count)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
 def _gemini_chat(
     system: str,
     user: str,
@@ -716,6 +742,18 @@ def _gemini_chat(
         config["response_schema"] = json_schema
     elif json_mode:
         config["response_mime_type"] = "application/json"
+    # Thought tokens are billed as output, and a model that thinks at "medium"
+    # by default multiplies the cost of every call. Empty or "off" sends no
+    # setting, for a model that rejects the level (3.8 Flash has no "minimal").
+    thinking = _env("GEMINI_THINKING_LEVEL", "minimal").strip().lower()
+    if thinking and thinking != "off":
+        try:
+            level = types.ThinkingLevel(thinking.upper())
+        except ValueError as e:
+            raise LLMUnavailable(
+                f"GEMINI_THINKING_LEVEL={thinking!r} is not one of minimal, low, "
+                f"medium, high or off") from e
+        config["thinking_config"] = types.ThinkingConfig(thinking_level=level)
 
     last_err: Exception | None = None
     for attempt in range(retries):
@@ -725,6 +763,7 @@ def _gemini_chat(
                 contents=user,
                 config=types.GenerateContentConfig(**config),
             )
+            _count_tokens("gemini", getattr(resp, "usage_metadata", None))
             return resp.text or ""
         except Exception as e:
             last_err = e

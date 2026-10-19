@@ -54,6 +54,10 @@ dependencies = [
     # still stores notes but reports itself lexical-only, and CompositeStore
     # then refuses it rather than silently degrading search.
     "pgvector>=0.2.5",
+    # Required whenever LLM_PROVIDER=gemini. Undeclared until now, so selecting
+    # Gemini in a container failed at the first call with an ImportError: the
+    # provider existed in llm.py but not in any image. Apache-2.0.
+    "google-genai>=2.31.0",
 ]
 
 [project.scripts]
