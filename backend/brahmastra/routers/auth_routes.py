@@ -17,6 +17,7 @@ Accounts over HTTP: sign in, personal API tokens, and (for admins) users.
     POST   /auth/users/{id}/password    admin: set a new password (ends their sessions)
     GET    /auth/audit                  admin: recent account events
     GET    /auth/plans                  every plan, with its features and limits
+    GET    /auth/usage                  my use this day and month against my plan's limits
     PUT    /auth/users/{id}/plan        admin: put someone on a plan (not yourself)
 
 Who may call what is decided in auth.required_role, not here, so these handlers
@@ -255,6 +256,16 @@ def list_plans() -> dict[str, Any]:
     from brahmastra.plans import FEATURES, LIMITS
 
     return {"plans": accounts.store().list_plans(), "features": FEATURES, "limits": LIMITS}
+
+
+@router.get("/usage")
+def my_usage(request: Request) -> dict[str, Any]:
+    from brahmastra import usage
+
+    me_ = _me(request)
+    if not me_.user_id:
+        return {"plan": None, "usage": []}
+    return {"plan": me_.plan, "usage": usage.report(me_.user_id, me_.role)}
 
 
 @router.put("/users/{user_id}/plan")

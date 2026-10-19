@@ -119,6 +119,15 @@ def test_remote_mcp_tools_are_scoped_to_the_caller(mcp_app):
         finally:
             reset_request_workspace(t)
 
+        # Notes added by an assistant count against the plan like any other:
+        # with one note a day, the second is refused with the reason.
+        import json as _json
+        contributor = store.get_plan("contributor")
+        store._q("UPDATE plans SET limits = ? WHERE id = 'contributor'",
+                 (_json.dumps({**contributor["limits"], "notes_day": 1}),))
+        assert "You've used your 1 notes today" in mia.call("brahmastra_add_note", title="Again",
+                                                             content="Second note")
+
         # Opening a workspace they are not a member of is refused before any tool runs.
         r = client.post("/mcp/", headers={"Authorization": f"Bearer {tok['mia@example.com']}",
                                           "Accept": ACCEPT, "X-Brahmastra-Workspace": "beta"},

@@ -32,7 +32,16 @@ export async function extractTriples(noteId: string, content: string): Promise<E
     })
     if (!noteRes.ok) {
       const text = await noteRes.text().catch(() => "")
-      throw new Error(`Backend /notes returned ${noteRes.status}: ${text}`)
+      // A plan refusal (403) or limit (429) carries a sentence written for
+      // people; show that rather than the status line and raw JSON.
+      let detail: string | null = null
+      try {
+        const parsed = JSON.parse(text)
+        if (typeof parsed?.detail === "string" && (parsed.code === "plan_limit" || parsed.code === "plan_feature")) {
+          detail = parsed.detail
+        }
+      } catch {}
+      throw new Error(detail ?? `Backend /notes returned ${noteRes.status}: ${text}`)
     }
 
     // 2. Run the incremental pipeline: extract → resolve → build-graph.

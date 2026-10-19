@@ -20,6 +20,18 @@ export interface PlanCatalog {
   limits: Record<string, string>
 }
 
+/** One limit's use, as GET /auth/usage returns it. */
+export interface UsageRow {
+  meter: "questions" | "notes" | "words" | "meeting_minutes"
+  period: "day" | "month"
+  limit_key: string
+  /** Meeting minutes arrive already converted to hours. */
+  used: number
+  limit: number | null
+  /** Seconds since the epoch. */
+  resets_at: number
+}
+
 /** Names for features, for the moments before the catalog has loaded. */
 export const FEATURE_NAMES: Record<string, string> = {
   ask: "Ask",

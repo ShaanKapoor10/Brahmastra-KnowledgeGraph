@@ -683,15 +683,7 @@ def _openai_chat(
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(**kwargs)
-            usage = getattr(resp, "usage", None)
-            if usage is not None:
-                completion = getattr(usage, "completion_tokens", 0) or 0
-                details = getattr(usage, "completion_tokens_details", None)
-                reasoning = getattr(details, "reasoning_tokens", 0) or 0
-                # OpenAI counts reasoning INSIDE completion_tokens; Gemini does
-                # not. Split it out so "output" means the same for both.
-                _record_tokens(provider, getattr(usage, "prompt_tokens", 0) or 0,
-                               completion - reasoning, reasoning)
+            _record_openai_usage(provider, getattr(resp, "usage", None))
             return resp.choices[0].message.content or ""
         except Exception as e:
             last_err = e
@@ -720,6 +712,20 @@ def _count_tokens(provider: str, usage: Any) -> None:
                    getattr(usage, "prompt_token_count", 0) or 0,
                    getattr(usage, "candidates_token_count", 0) or 0,
                    getattr(usage, "thoughts_token_count", 0) or 0)
+
+
+def _record_openai_usage(provider: str, usage: Any) -> None:
+    """Tokens from an OpenAI-shaped `usage` (OpenAI, OpenCode, Groq).
+
+    OpenAI counts reasoning INSIDE completion_tokens; Gemini does not. Split
+    out here, so "output" means the same thing for every provider.
+    """
+    if usage is None:
+        return
+    completion = getattr(usage, "completion_tokens", 0) or 0
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", 0) or 0
+    _record_tokens(provider, getattr(usage, "prompt_tokens", 0) or 0, completion - reasoning, reasoning)
 
 
 def _record_tokens(provider: str, input_tokens: int, output_tokens: int,
@@ -864,6 +870,7 @@ def _groq_chat(
     try:
         resp = groq_pool.pool().call(
             lambda client: client.chat.completions.create(**kwargs))
+        _record_openai_usage("groq", getattr(resp, "usage", None))
         return resp.choices[0].message.content or ""
     except LLMUnavailable:
         raise
@@ -902,6 +909,10 @@ def _anthropic_chat(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        _record_tokens("anthropic", getattr(usage, "input_tokens", 0) or 0,
+                       getattr(usage, "output_tokens", 0) or 0, 0)
     return "".join(block.text for block in resp.content if block.type == "text")
 
 

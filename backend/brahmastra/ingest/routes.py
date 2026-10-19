@@ -23,6 +23,8 @@ from brahmastra.ingest import assemble
 from brahmastra.ingest.assemble import process_transcript
 from brahmastra.ingest.modes import MODES, get_mode, is_mode
 from brahmastra.ingest.store import Transcript, get_ingest_store
+from brahmastra import usage
+from brahmastra.accounts import current_identity
 from brahmastra.workspace import current_workspace
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -84,6 +86,7 @@ async def submit_transcript(
     body: TranscriptIn, background_tasks: BackgroundTasks
 ) -> dict[str, Any]:
     """Accept a transcript as JSON and start processing it."""
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(body.content))
     workspace = current_workspace()
     store = get_ingest_store(workspace)
     tid = store.create_transcript(Transcript(
@@ -132,6 +135,7 @@ async def upload_transcript(
     if not text.strip():
         raise HTTPException(status_code=400, detail="the file is empty")
 
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(text))
     workspace = current_workspace()
     store = get_ingest_store(workspace)
     tid = store.create_transcript(Transcript(
@@ -219,6 +223,8 @@ async def reprocess(transcript_id: str,
     if record is None:
         raise HTTPException(status_code=404, detail=f"no transcript {transcript_id!r}")
     chosen = _checked_mode(mode)
+    # Processing again costs again, so it counts again.
+    usage.charge(current_identity(), "meeting_minutes", usage.meeting_minutes(record.get("content") or ""))
     if chosen:
         store.set_transcript_mode(transcript_id, chosen)
     background_tasks.add_task(_launch, transcript_id, workspace)

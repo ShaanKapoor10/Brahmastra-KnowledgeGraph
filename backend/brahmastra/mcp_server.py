@@ -508,6 +508,15 @@ def brahmastra_add_note(
     as session checkpoints, which belong in the graph, not in Notion.
     """
     db.init_db()
+    from brahmastra import usage
+    from brahmastra.accounts import current_identity
+
+    # Counted as for the dashboard: an assistant adding notes in a loop meets
+    # the same daily limit a person would.
+    try:
+        usage.charge_note(current_identity(), content)
+    except usage.LimitReached as e:
+        return _denied(str(e))
     nid = note_id or str(uuid.uuid4())[:8]
     db.upsert_note(nid, title, content, mark_pending=True,
                    publish=publish or None, source="mcp")

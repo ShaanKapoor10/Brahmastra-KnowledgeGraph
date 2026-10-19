@@ -208,6 +208,24 @@ async def require_api_key(request: Request, call_next):
         return JSONResponse(status_code=403, content={"detail": refusal(feature), "code": "plan_feature",
                                                       "feature": feature})
 
+    # A question is counted against the plan BEFORE it is answered, so two
+    # parallel requests cannot both take the last one, and handed back below
+    # if the answer fails. Notes and meetings are counted where they enter,
+    # because their size is in the request body.
+    charged = False
+    if identity.user_id and request.method == "POST" and path == "/ask":
+        from brahmastra import usage
+
+        try:
+            await run_in_threadpool(usage.charge, identity, "questions")
+            charged = True
+        except usage.LimitReached as e:
+            return JSONResponse(status_code=429, content=e.body(),
+                                headers={"Retry-After": str(max(1, int(e.reset_at - time.time())))})
+        except Exception:                               # noqa: BLE001
+            # The counter is unreachable: a meter must never take the API down.
+            pass
+
     if identity.user_id:
         from brahmastra import ratelimit
 
@@ -228,6 +246,24 @@ async def require_api_key(request: Request, call_next):
     request.state.identity = identity
     token = bind_identity(identity)
     try:
-        return await call_next(request)
+        response = await call_next(request)
+    except Exception:
+        # A route that raises reaches here as an exception, not as a 500.
+        if charged:
+            await _refund_question(identity)
+        raise
     finally:
         unbind_identity(token)
+    if charged and response.status_code >= 400:
+        await _refund_question(identity)
+    return response
+
+
+async def _refund_question(identity) -> None:
+    """A failed question was not answered, so it does not count."""
+    from brahmastra import usage
+
+    try:
+        await run_in_threadpool(usage.refund, identity, "questions")
+    except Exception:                                   # noqa: BLE001
+        pass

@@ -298,12 +298,14 @@ def _fresh_accounts():
     database, so both are reset, or one test's admin would lock the next test's
     anonymous app.
     """
-    from brahmastra import accounts, auth, ratelimit
+    from brahmastra import accounts, auth, ratelimit, usage
 
     accounts.reset_store_for_tests()
     auth.reset_for_tests()
     ratelimit.reset()
+    usage.reset()          # plan usage counters: a cached store, like the rate limiter's
     yield
     accounts.reset_store_for_tests()
     auth.reset_for_tests()
+    usage.reset()
 
