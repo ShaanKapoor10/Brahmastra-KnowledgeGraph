@@ -6,13 +6,17 @@ import { extractTriples } from "@/app/actions/extract"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { RELATION_LABEL } from "@/lib/viz"
-import { FileText, Loader2, Plus, Search, X } from "lucide-react"
+import { FileText, Loader2, Plus, Search, Trash2, X } from "lucide-react"
 import { PlanLocked } from "@/components/plan-lock"
 
 interface Props {
   notes: Note[]
   triples: RawTriple[]
   onAddNote: (note: Note, triples: RawTriple[]) => void
+  /** Called once the backend has removed a note. */
+  onRemoved?: (id: string) => void
+  /** Whether to offer Remove on a note added by `owner`. The server decides regardless. */
+  canRemove?: (owner: string | null | undefined) => boolean
   /** False when the person's plan has no "Add notes": the form becomes a notice. */
   canAdd?: boolean
   workspace?: string
@@ -26,9 +30,10 @@ interface Hit {
   content: string
   last_edited?: string | null
   extraction_status?: string | null
+  added_by?: string | null
 }
 
-export function NotesPanel({ notes, triples, onAddNote, workspace = "default", backendAvailable = false, canAdd = true }: Props) {
+export function NotesPanel({ notes, triples, onAddNote, onRemoved, canRemove, workspace = "default", backendAvailable = false, canAdd = true }: Props) {
   const [title, setTitle] = useState("")
   const [content, setContent] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -66,6 +71,7 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
             content: h.content,
             lastEdited: h.last_edited ?? "",
             extractionStatus: (h.extraction_status ?? "done") as Note["extractionStatus"],
+            addedBy: h.added_by ?? null,
           })),
         })
         setFailed(null)
@@ -95,7 +101,15 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
     () => [...notes].sort((a, b) => (b.lastEdited || "").localeCompare(a.lastEdited || "")),
     [notes],
   )
-  const shown = hits ?? newestFirst
+  // A note removed while a search is on screen leaves that search's results too.
+  const [gone, setGone] = useState<Set<string>>(() => new Set())
+  const shown = (hits ?? newestFirst).filter((n) => !gone.has(n.id))
+  const scope = workspace === "default" ? "" : `?workspace=${encodeURIComponent(workspace)}`
+
+  const removed = (id: string) => {
+    setGone((g) => new Set(g).add(id))
+    onRemoved?.(id)
+  }
 
   const handleExtract = () => {
     if (!content.trim()) return
@@ -183,7 +197,13 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
 
       <div className="flex flex-col gap-2.5">
         {shown.map((n) => (
-          <NoteCard key={n.id} note={n} triples={triplesByNote(n.id)} />
+          <NoteCard
+            key={n.id}
+            note={n}
+            triples={triplesByNote(n.id)}
+            removeUrl={canRemove?.(n.addedBy) ? `/api/notes/${encodeURIComponent(n.id)}${scope}` : null}
+            onRemoved={() => removed(n.id)}
+          />
         ))}
         {hits && hits.length === 0 && !searching && <p className="text-sm text-muted-foreground">No note matches that.</p>}
       </div>
@@ -191,8 +211,40 @@ export function NotesPanel({ notes, triples, onAddNote, workspace = "default", b
   )
 }
 
-function NoteCard({ note, triples }: { note: Note; triples: RawTriple[] }) {
+function NoteCard({
+  note,
+  triples,
+  removeUrl,
+  onRemoved,
+}: {
+  note: Note
+  triples: RawTriple[]
+  /** Where to send DELETE, or null when this person may not remove the note. */
+  removeUrl: string | null
+  onRemoved: () => void
+}) {
   const [open, setOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+
+  const remove = async () => {
+    if (!removeUrl) return
+    setRemoving(true)
+    setRemoveError(null)
+    try {
+      const res = await fetch(removeUrl, { method: "DELETE", cache: "no-store" })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(typeof body?.detail === "string" ? body.detail : `${res.status} ${res.statusText}`)
+      }
+      onRemoved()
+    } catch (e) {
+      setRemoveError((e as Error).message)
+      setRemoving(false)
+    }
+  }
+
   const long = note.content.length > 360
   const status = note.extractionStatus as string
   return (
@@ -212,7 +264,35 @@ function NoteCard({ note, triples }: { note: Note; triples: RawTriple[] }) {
         <span className="ml-auto shrink-0 font-mono text-[10px] uppercase tracking-wider text-primary">
           {triples.length} triple{triples.length === 1 ? "" : "s"}
         </span>
+        {removeUrl && !confirming && (
+          <button
+            onClick={() => setConfirming(true)}
+            aria-label={`Remove ${note.title}`}
+            title="Remove this note"
+            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
+      {confirming && (
+        <div role="alert" className="mb-2 rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-sm">
+          <p className="text-foreground">
+            Remove this note and the {triples.length > 0 ? `${triples.length} ` : ""}fact{triples.length === 1 ? "" : "s"} taken from it?
+            The graph updates on the next pipeline run. This can&rsquo;t be undone, apart from restoring a backup.
+          </p>
+          {removeError && <p className="mt-1.5 text-destructive">{removeError}</p>}
+          <div className="mt-2 flex gap-2">
+            <Button size="sm" variant="destructive" onClick={remove} disabled={removing} className="gap-1.5">
+              {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {removing ? "Removing…" : "Remove note"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => { setConfirming(false); setRemoveError(null) }} disabled={removing}>
+              Keep it
+            </Button>
+          </div>
+        </div>
+      )}
       <p className={`whitespace-pre-line text-sm leading-relaxed text-muted-foreground ${open ? "" : "line-clamp-4"}`}>
         {note.content}
       </p>

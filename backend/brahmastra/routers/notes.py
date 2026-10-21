@@ -5,7 +5,7 @@ Notes router — CRUD for notes in SQLite.
 from __future__ import annotations
 
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from brahmastra import db, usage
@@ -42,8 +42,17 @@ async def list_notes(
     by date discards the entire point of it.
     """
     if q and q.strip():
-        return db.search_notes(q, limit=limit)
-    return db.get_notes(status=status)
+        return _with_authors(db.search_notes(q, limit=limit))
+    return _with_authors(db.get_notes(status=status))
+
+
+def _with_authors(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add `added_by` (a user id, or None) so the dashboard can offer Remove
+    only where the server would allow it. The server still decides."""
+    authors = usage.authors_of([n["id"] for n in notes if n.get("id")])
+    for n in notes:
+        n["added_by"] = authors.get(n.get("id") or "")
+    return notes
 
 
 @router.get("/{note_id}")
@@ -51,7 +60,7 @@ async def get_note(note_id: str) -> dict[str, Any]:
     note = db.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    return note
+    return _with_authors([note])[0]
 
 
 @router.post("", status_code=201)
@@ -80,10 +89,16 @@ async def create_note(body: NoteCreate) -> dict[str, Any]:
 
 
 @router.delete("/{note_id}", status_code=204)
-async def delete_note(note_id: str) -> None:
-    note = db.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    # Goes through the store API rather than raw SQL, so this works on any
-    # backend. delete_note removes the note and its derived triples together.
-    db.delete_note(note_id)
+async def delete_note(note_id: str, request: Request) -> None:
+    """Remove a note and the facts taken from it. Admins: any note; members:
+    their own. A note from Notion is also kept out of later syncs. See
+    brahmastra/removals.py."""
+    from brahmastra import removals
+
+    actor, ip = removals.who(request)
+    try:
+        removals.remove_note(note_id, actor=actor, ip=ip)
+    except removals.NotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except removals.NotAllowed as e:
+        raise HTTPException(status_code=403, detail=str(e))

@@ -179,6 +179,9 @@ def test_only_admins_assign_plans_and_only_real_plans(client):
 # health. Roles already decide them, and none spends tokens a plan should meter
 # on a person's behalf.
 NOT_A_PLAN_FEATURE = ("/auth", "/diagnostics", "/pipeline", "/health")
+# Removing costs nothing, and a smaller plan must never strand what someone
+# added; removals.py decides who may remove what.
+REMOVALS = {("DELETE", "/notes/{note_id}"), ("DELETE", "/ingest/transcripts/{transcript_id}")}
 
 
 def test_every_route_is_either_a_plan_feature_or_deliberately_not(client):
@@ -190,6 +193,9 @@ def test_every_route_is_either_a_plan_feature_or_deliberately_not(client):
     for path, ops in main.app.openapi()["paths"].items():
         for method in ops:
             if path.startswith(NOT_A_PLAN_FEATURE) or path in ("/workspaces", "/workspaces/{workspace_id}"):
+                continue
+            if (method.upper(), path) in REMOVALS:
+                assert route_feature(method.upper(), path) is None
                 continue
             assert route_feature(method.upper(), path.replace("{", "").replace("}", "")) is not None, \
                 f"{method.upper()} {path} has no plan feature"

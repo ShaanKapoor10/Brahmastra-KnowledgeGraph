@@ -433,6 +433,21 @@ suite runs single-store SQLite, where one delete does both, so no test could see
 `delete_note` and `delete_workspace` are now explicit on `CompositeStore`, derived rows
 first. They are the ONLY source methods routed to both halves.
 
+### Removing notes and meetings: who may, and what is remembered
+`DELETE /notes/{id}` and `DELETE /ingest/transcripts/{id}` go through
+`brahmastra/removals.py`. Admins remove anything; a member removes only what is
+recorded as theirs (`note_authors` for notes, `transcripts.submitted_by` for meetings);
+viewers never reach it (DELETE needs the member role). **Nobody recorded means admin
+only**, so "unowned" never reads as "anyone may". Every removal writes `note.remove` or
+`meeting.remove` to the audit log. Removing is deliberately not a plan feature
+(`plans.route_feature`), so a smaller plan never strands what someone added.
+
+A note pulled from Notion is a copy of a page that still exists: deleting only the copy
+meant the next sync pulled it straight back. `removed_sources` (SOURCE data, beside the
+notes) records "don't pull this page again", and `sync._process_page` skips it. The page
+in Notion is never touched. The dashboard shows Remove only where the server would allow
+it (`lib/plans.ts` `mayRemove`); the server decides regardless.
+
 ### The scheduler keeps every workspace current
 `live_sync` ticks every registered workspace, each bound for the whole tick. Before, it
 ran only `BRAHMASTRA_WORKSPACE`, and notes elsewhere — including a transcript's — sat at

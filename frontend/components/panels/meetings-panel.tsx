@@ -11,6 +11,7 @@ import {
   RefreshCw,
   RotateCw,
   Search,
+  Trash2,
   Undo2,
   Upload,
   Users,
@@ -28,6 +29,8 @@ interface TranscriptRow {
   chunk_count?: number | null
   mode?: string | null
   progress?: Progress
+  /** Who uploaded it (a user id), or null when nobody is recorded. */
+  submitted_by?: string | null
 }
 
 /** How a session is read (GET /ingest/modes): a meeting, a lecture, ... */
@@ -195,12 +198,15 @@ export function MeetingsPanel({
   workspaces = [],
   backendAvailable,
   canAdd = true,
+  canRemove,
 }: {
   workspace: string
   workspaces?: { id: string; name?: string }[]
   backendAvailable: boolean
   /** False when the person's plan has no "Meetings": results stay readable. */
   canAdd?: boolean
+  /** Whether to offer Remove on a meeting uploaded by `owner`. The server decides regardless. */
+  canRemove?: (owner: string | null | undefined) => boolean
 }) {
   const [rows, setRows] = useState<TranscriptRow[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -299,6 +305,20 @@ export function MeetingsPanel({
     } catch (e) {
       setError((e as Error).message)
     }
+  }
+
+  const removeMeeting = async (id: string, title: string, purgeNotes: boolean) => {
+    await api(scoped(`/ingest/transcripts/${id}${purgeNotes ? "?purge_notes=true" : ""}`, workspace), {
+      method: "DELETE",
+    })
+    setSelected(null)
+    setMeeting(null)
+    loadList()
+    setNotice(
+      purgeNotes
+        ? `Removed "${title}" and the notes made from it. The graph updates on the next pipeline run.`
+        : `Removed "${title}". The notes made from it stay as ordinary notes.`,
+    )
   }
 
   if (!backendAvailable) {
@@ -405,6 +425,11 @@ export function MeetingsPanel({
               onToggleShowRejected={() => setShowRejected((s) => !s)}
               onToggleReject={toggleReject}
               onReprocess={(mode) => reprocess(meeting.id, mode)}
+              onRemove={
+                canRemove?.(rows.find((r) => r.id === meeting.id)?.submitted_by)
+                  ? (purge) => removeMeeting(meeting.id, meeting.title, purge)
+                  : undefined
+              }
             />
           )}
         </section>
@@ -422,6 +447,7 @@ function MeetingView({
   onToggleShowRejected,
   onToggleReject,
   onReprocess,
+  onRemove,
 }: {
   meeting: Meeting
   workspace: string
@@ -431,6 +457,8 @@ function MeetingView({
   onToggleShowRejected: () => void
   onToggleReject: (item: Item) => void
   onReprocess: (mode?: string) => void
+  /** Absent when this person may not remove the meeting. */
+  onRemove?: (purgeNotes: boolean) => Promise<void>
 }) {
   const mode = meeting.mode ?? FALLBACK_MODES[0]
   const kinds = mode.kinds
@@ -453,6 +481,31 @@ function MeetingView({
   if (readAsFor !== mode.id) {
     setReadAsFor(mode.id)
     setReadAs(mode.id)
+  }
+
+  // Removing: a confirmation inside the card, with the notes kept by default.
+  const [confirming, setConfirming] = useState(false)
+  const [purgeNotes, setPurgeNotes] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const [confirmFor, setConfirmFor] = useState(meeting.id)
+  if (confirmFor !== meeting.id) {
+    setConfirmFor(meeting.id)
+    setConfirming(false)
+    setPurgeNotes(false)
+    setRemoveError(null)
+  }
+  const remove = async () => {
+    if (!onRemove) return
+    setRemoving(true)
+    setRemoveError(null)
+    try {
+      await onRemove(purgeNotes)
+    } catch (e) {
+      setRemoveError((e as Error).message)
+    } finally {
+      setRemoving(false)
+    }
   }
 
   return (
@@ -501,8 +554,56 @@ function MeetingView({
               <RotateCw className="h-3 w-3" />
               {readAs !== mode.id ? `process again as ${modes.find((m) => m.id === readAs)?.label.toLowerCase() ?? readAs}` : "process again"}
             </button>
+            {onRemove && (
+              <button
+                onClick={() => setConfirming(true)}
+                disabled={confirming || running(meeting.status)}
+                className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:opacity-50"
+              >
+                <Trash2 className="h-3 w-3" />
+                remove
+              </button>
+            )}
           </div>
         </div>
+        {confirming && onRemove && (
+          <div role="alert" className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+            <p className="font-medium text-foreground">Remove &ldquo;{meeting.title}&rdquo;?</p>
+            <p className="mt-1 text-muted-foreground">
+              The transcript, its passages and its findings go. What should happen to the notes made from it?
+            </p>
+            <fieldset className="mt-2 flex flex-col gap-1.5">
+              <legend className="sr-only">Notes made from this meeting</legend>
+              <label className="flex items-start gap-2">
+                <input type="radio" name={`purge-${meeting.id}`} checked={!purgeNotes} onChange={() => setPurgeNotes(false)} className="mt-1" />
+                <span><span className="text-foreground">Keep the notes</span> <span className="text-muted-foreground">as ordinary notes that nothing will change</span></span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input type="radio" name={`purge-${meeting.id}`} checked={purgeNotes} onChange={() => setPurgeNotes(true)} className="mt-1" />
+                <span><span className="text-foreground">Remove them too</span> <span className="text-muted-foreground">with the facts taken from them</span></span>
+              </label>
+            </fieldset>
+            <p className="mt-2 text-xs text-muted-foreground">This can&rsquo;t be undone, apart from restoring a backup.</p>
+            {removeError && <p className="mt-1.5 text-destructive">{removeError}</p>}
+            <div className="mt-2.5 flex gap-2">
+              <button
+                onClick={remove}
+                disabled={removing}
+                className="flex items-center gap-1.5 rounded-md bg-destructive px-3 py-1.5 text-xs font-medium text-white hover:bg-destructive/90 disabled:opacity-60"
+              >
+                {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {removing ? "Removing…" : "Remove meeting"}
+              </button>
+              <button
+                onClick={() => { setConfirming(false); setRemoveError(null) }}
+                disabled={removing}
+                className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Keep it
+              </button>
+            </div>
+          </div>
+        )}
         {meeting.error && <p className="mt-2 text-sm text-destructive">{meeting.error}</p>}
         {running(meeting.status) && meeting.progress && (
           <div className="mt-3 flex flex-col gap-1.5">

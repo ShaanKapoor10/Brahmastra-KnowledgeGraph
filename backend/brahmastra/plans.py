@@ -118,6 +118,11 @@ def route_feature(method: str, path: str) -> str | None:
         return "cross_workspace"
     if path.startswith(("/graph", "/entities", "/paths")):
         return "graph"
+    if method == "DELETE" and (path.startswith("/notes/") or path.startswith("/ingest/transcripts/")):
+        # Removing costs nothing a plan meters, and someone moved to a smaller
+        # plan must still be able to clear away what they added. Who may
+        # remove what is decided in removals.py.
+        return None
     if path == "/notes" or path.startswith("/notes/"):
         return "browse" if method in ("GET", "HEAD") else "add_notes"
     if path.startswith("/ingest/"):

@@ -52,3 +52,19 @@ export function can(user: { features?: string[] | null } | null | undefined, fea
   if (!user || user.features == null) return true
   return user.features.includes(feature)
 }
+
+/**
+ * Whether the Remove button should show for something added by `owner`.
+ * Mirrors backend/brahmastra/removals.py: admins remove anything, a member only
+ * what is recorded as theirs, a viewer nothing. The server decides regardless;
+ * this only hides a button it would refuse. No user means development mode,
+ * where the backend treats every request as an admin.
+ */
+export function mayRemove(
+  user: { role?: string; user_id?: string | null } | null | undefined,
+  owner: string | null | undefined,
+): boolean {
+  if (!user) return true
+  if (user.role === "admin") return true
+  return user.role === "member" && !!user.user_id && !!owner && owner === user.user_id
+}
