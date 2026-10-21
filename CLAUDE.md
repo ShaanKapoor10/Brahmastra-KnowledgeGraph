@@ -448,6 +448,13 @@ notes) records "don't pull this page again", and `sync._process_page` skips it. 
 in Notion is never touched. The dashboard shows Remove only where the server would allow
 it (`lib/plans.ts` `mayRemove`); the server decides regardless.
 
+A removal deletes the facts at once, but the graph built from them used to wait for the
+next pipeline run, so a removed meeting stayed visible as an entity and Ask still found
+it. Each removal now marks the graph stale and starts `removals.refresh_graph` in the
+background: `run_pipeline(graph_only=True)`, which resolves, builds, summarises and
+caches from the stored facts and does **no** Notion sync or write-back, no checkpoint
+drain and no extraction. A name that other notes still mention correctly stays.
+
 ### The scheduler keeps every workspace current
 `live_sync` ticks every registered workspace, each bound for the whole tick. Before, it
 ran only `BRAHMASTRA_WORKSPACE`, and notes elsewhere — including a transcript's — sat at

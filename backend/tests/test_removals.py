@@ -19,6 +19,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 PW = "correct horse battery"
 
+from brahmastra import removals as _removals  # noqa: E402
+
+REAL_REFRESH = _removals.refresh_graph
+
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
@@ -36,6 +40,16 @@ def client(monkeypatch, tmp_path):
     auth.reset_for_tests()
     usage.reset()
     return TestClient(main.app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def refreshes(monkeypatch):
+    """The graph rebuild a removal starts, recorded instead of run: the
+    graph-only run itself is tested on its own below."""
+    from brahmastra import removals
+    calls: list[str] = []
+    monkeypatch.setattr(removals, "refresh_graph", lambda ws: calls.append(ws))
+    return calls
 
 
 def _store():
@@ -188,6 +202,64 @@ def test_an_uploaded_meeting_records_who_submitted_it(client, team):
     assert r.status_code == 200, r.text
     from brahmastra.ingest.store import get_ingest_store
     assert get_ingest_store().get_transcript(r.json()["transcript_id"])["submitted_by"] == mia["id"]
+
+
+# ---------------------------------------------------------------- the graph follows
+
+def test_a_removal_rebuilds_the_graph_of_its_own_workspace(client, team, refreshes):
+    from brahmastra import pipeline
+    _add_note(client, team["mia"][1])
+    tid = _meeting(team["mia"][0]["id"])
+    client.delete("/notes/n-mia", headers=team["mia"][1])
+    client.delete(f"/ingest/transcripts/{tid}", headers=team["mia"][1])
+    assert refreshes == ["default", "default"]
+    assert "removed" in (pipeline.dirty_since() or {}).get("reason", "")
+
+
+def test_a_refused_removal_rebuilds_nothing(client, team, refreshes):
+    _add_note(client, team["mia"][1])
+    client.delete("/notes/n-mia", headers=team["ola"][1])
+    assert refreshes == []
+
+
+def test_the_graph_only_run_drops_a_removed_notes_entities_and_reaches_nothing_outside(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAHMASTRA_DB", str(tmp_path / "graph-only.db"))
+    monkeypatch.setenv("EMBEDDINGS_ENABLED", "0")
+    monkeypatch.setenv("NOTION_TOKEN", "secret_not_used")
+    monkeypatch.setenv("NOTION_DATABASE_ID", "db-not-used")
+    import brahmastra.db as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    from brahmastra import extraction, notion_writeback, sync
+
+    def forbidden(*a, **k):
+        raise AssertionError("a graph-only rebuild must not sync, extract or write back")
+
+    monkeypatch.setattr(sync, "run_sync", forbidden)
+    monkeypatch.setattr(extraction, "run_extraction", forbidden)
+    monkeypatch.setattr(notion_writeback, "push_insights", forbidden)
+
+    def fact(note, s, o):
+        return {"subject_text": s, "subject_type": "person", "relation": "employed_by",
+                "object_text": o, "object_type": "organisation", "confidence": 0.9,
+                "source_quote": f"{s} works at {o}.", "source_note_id": note}
+
+    db_mod.upsert_note("keep", "keep", "Mei works at Acme.", mark_pending=False)
+    db_mod.upsert_note("gone", "gone", "Raj works at Initech.", mark_pending=False)
+    db_mod.insert_triples([fact("keep", "Mei", "Acme"), fact("gone", "Raj", "Initech")])
+
+    def names():
+        graph = (db_mod.get_cached_graph() or {}).get("graph") or {}
+        return {n.get("id") for n in graph.get("nodes", [])}
+
+    first = REAL_REFRESH("default")
+    assert first["mode"] == "graph" and "graph" not in first["failed_stages"]
+    assert {"Raj", "Initech", "Mei", "Acme"} <= names()
+
+    db_mod.delete_note("gone")
+    REAL_REFRESH("default")
+    assert "Raj" not in names() and "Initech" not in names()
+    assert {"Mei", "Acme"} <= names()
 
 
 # ---------------------------------------------------------------- the rule itself

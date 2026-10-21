@@ -5,7 +5,7 @@ Notes router — CRUD for notes in SQLite.
 from __future__ import annotations
 
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
 from brahmastra import db, usage
@@ -89,7 +89,7 @@ async def create_note(body: NoteCreate) -> dict[str, Any]:
 
 
 @router.delete("/{note_id}", status_code=204)
-async def delete_note(note_id: str, request: Request) -> None:
+async def delete_note(note_id: str, request: Request, background_tasks: BackgroundTasks) -> None:
     """Remove a note and the facts taken from it. Admins: any note; members:
     their own. A note from Notion is also kept out of later syncs. See
     brahmastra/removals.py."""
@@ -102,3 +102,6 @@ async def delete_note(note_id: str, request: Request) -> None:
         raise HTTPException(status_code=404, detail=str(e))
     except removals.NotAllowed as e:
         raise HTTPException(status_code=403, detail=str(e))
+    from brahmastra.workspace import current_workspace
+
+    background_tasks.add_task(removals.refresh_graph, current_workspace())

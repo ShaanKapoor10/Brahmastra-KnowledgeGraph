@@ -241,7 +241,7 @@ async def reprocess(transcript_id: str,
 
 
 @router.delete("/transcripts/{transcript_id}")
-async def delete_transcript(transcript_id: str, request: Request,
+async def delete_transcript(transcript_id: str, request: Request, background_tasks: BackgroundTasks,
                             purge_notes: bool = False) -> dict[str, Any]:
     """
     Removes the transcript, its chunks and its artifacts.
@@ -259,12 +259,14 @@ async def delete_transcript(transcript_id: str, request: Request,
 
     actor, ip = removals.who(request)
     try:
-        return removals.remove_meeting(transcript_id, purge_notes=purge_notes,
-                                       actor=actor, ip=ip, store=get_ingest_store())
+        result = removals.remove_meeting(transcript_id, purge_notes=purge_notes,
+                                         actor=actor, ip=ip, store=get_ingest_store())
     except removals.NotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
     except removals.NotAllowed as e:
         raise HTTPException(status_code=403, detail=str(e))
+    background_tasks.add_task(removals.refresh_graph, current_workspace())
+    return result
 
 
 @router.get("/artifacts")

@@ -279,7 +279,7 @@ function NoteCard({
         <div role="alert" className="mb-2 rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-sm">
           <p className="text-foreground">
             Remove this note and the {triples.length > 0 ? `${triples.length} ` : ""}fact{triples.length === 1 ? "" : "s"} taken from it?
-            The graph updates on the next pipeline run. This can&rsquo;t be undone, apart from restoring a backup.
+            The graph rebuilds without it in a minute or two. This can&rsquo;t be undone, apart from restoring a backup.
           </p>
           {removeError && <p className="mt-1.5 text-destructive">{removeError}</p>}
           <div className="mt-2 flex gap-2">

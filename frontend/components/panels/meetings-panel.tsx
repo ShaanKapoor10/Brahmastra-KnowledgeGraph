@@ -316,7 +316,7 @@ export function MeetingsPanel({
     loadList()
     setNotice(
       purgeNotes
-        ? `Removed "${title}" and the notes made from it. The graph updates on the next pipeline run.`
+        ? `Removed "${title}" and the notes made from it. The graph is rebuilding without them; reload in a minute or two.`
         : `Removed "${title}". The notes made from it stay as ordinary notes.`,
     )
   }
