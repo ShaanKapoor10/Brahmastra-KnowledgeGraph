@@ -28,7 +28,7 @@ dependencies = [
     # while the local dev environment on 1.28 was fine. Same shape as the pnpm
     # break: nothing here changed, the dependency shipped a major.
     # Moving to 2.x means porting to its `mcpserver` API; do it deliberately.
-    "mcp>=1.0.0,<2",
+    "mcp>=1.0.0,<3",
     "groq>=1.0.0",
     "numpy>=1.26.0",
     "scipy>=1.13.0",
