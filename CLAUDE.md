@@ -9,8 +9,8 @@ only makes the tools available; using them is on you, every time.
 ### The loop you MUST follow
 
 1. **RECALL at the start of any task.**
-   Before planning or coding, call `brahmastra_get_graph_stats` and
-   `brahmastra_search_entities` to load what's already known about the project.
+   Before planning or coding, call `brahmastra_get_briefing` (the workspace's purpose,
+   its briefing note, what was stored lately) and `brahmastra_search_notes` on the task.
    IMPORTANT: `brahmastra_search_entities` only matches entity NAMES in the graph.
    To recall what was *written* about a topic (decisions, bug fixes, changes), use
    `brahmastra_search_notes` — it searches the full text of every note and surfaces
@@ -23,19 +23,31 @@ only makes the tools available; using them is on you, every time.
    Write notes as entity-rich subject–relation–object prose (e.g. "Brahmastra uses Ollama.
    The file extraction.py implements retry logic."). That extracts into a good graph.
 
-3. **REBUILD after adding notes — EXPLICITLY, in the same turn.**
-   Call `brahmastra_run_pipeline` (use `incremental`; use `full` only to re-extract
-   everything). Do NOT rely on the live watcher to do this — it can stop silently. An
-   `add_note` without a rebuild leaves the note `pending` with 0 triples, so it is
-   INVISIBLE to `search_entities` and other sessions cannot recall it. Verify the note
-   reached `extraction_status='done'` before considering it stored.
+3. **CHECK the note was stored — no separate rebuild step any more.**
+   `brahmastra_add_note` extracts the note in the call and then rebuilds the graph on a
+   background thread (graph only, ~45s, `GRAPH_AUTO_REFRESH=0` turns it off). Its reply
+   says `"extraction": "done"`; if it says `pending` (a model failure), call
+   `brahmastra_run_pipeline` to retry. That tool now **returns at once** and runs in the
+   background; `brahmastra_get_graph_stats` → `pipeline` says when it finished.
 
-### Available MCP tools (12)
+### ⚠️ Why run_pipeline used to hang for 30 minutes (fixed 2026-10-22)
+Not the pipeline: `version.status()` ran `git rev-parse` before every run. A stdio MCP
+server's stdin is the client's pipe; the child inherited it and, on Windows, Git's
+runtime blocked at startup. `timeout=5` killed only the `git.exe` wrapper, then waited
+forever on pipes the inner git held. FastMCP runs a sync tool on the event loop, so the
+whole server froze until Claude Code gave up at 1800s. Found with
+`uvx py-spy dump --pid <server>` (main thread in `subprocess.communicate` under
+`_git_commit`; a `git rev-parse` alive since the previous day). The commit is now read
+from `.git` files, never by a process. **Any subprocess reachable from the MCP server
+must pass `stdin=subprocess.DEVNULL`.** Find the right server PID by its parent: each
+Claude session starts its own, and a stale one from yesterday may be the one you're on.
+
+### Available MCP tools (13)
 
 Use the PRODUCTION Brahmastra MCP (`brahmastra_*` from the Brahmastra plugin) for memory.
 A `brahmastra-test` server exists for the Haiku experiment and is not plugged in; never
 store memory there.
-Core: `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
+Core: `brahmastra_get_briefing`, `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
 `brahmastra_search_sessions`, `brahmastra_search_code`,
 `brahmastra_get_entity_details`, `brahmastra_get_graph_stats`,
 `brahmastra_get_contradictions`, `brahmastra_run_pipeline`.

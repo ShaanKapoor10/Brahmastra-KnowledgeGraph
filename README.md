@@ -303,6 +303,7 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 
 | Tool | What it does |
 |:--|:--|
+| `brahmastra_get_briefing` | Start on a project: its purpose, rules and what was stored lately |
 | `brahmastra_search_notes` | Recall what was decided, fixed or learned about any topic |
 | `brahmastra_add_note` | Remember something, searchable immediately |
 | `brahmastra_search_entities` | Find a person, project or file and its connections |
@@ -311,7 +312,7 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 | `brahmastra_search_code` | Where something is implemented, by file and line |
 | `brahmastra_get_contradictions` | Where your knowledge disagrees, and which side is newer |
 | `brahmastra_get_graph_stats` | The shape of the graph: size, central entities, topics |
-| `brahmastra_run_pipeline` | Rebuild the graph, incrementally or in full |
+| `brahmastra_run_pipeline` | Rebuild the graph in the background, incrementally or in full |
 | `brahmastra_list_workspaces` | See every workspace |
 | `brahmastra_create_workspace` | Start a new, isolated graph |
 | `brahmastra_search_all_workspaces` | Search across workspaces, when you ask for it |

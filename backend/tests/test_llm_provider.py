@@ -471,3 +471,39 @@ def test_openai_style_reasoning_is_counted_as_thoughts_not_output(monkeypatch):
     assert counted("input") - before["input"] == 900
     assert counted("output") - before["output"] == 180
     assert counted("thoughts") - before["thoughts"] == 120
+
+
+def test_the_ollama_probe_is_remembered_briefly(monkeypatch):
+    """Every chat() resolves its provider and resolving probes Ollama, twice per
+    call. With nothing listening that probe cost 4.1s each, so the entity judge
+    spent ~8s per batch before asking anything (2026-10-22)."""
+    from brahmastra import llm
+
+    calls = []
+
+    def refused(url, timeout):
+        calls.append(url)
+        raise OSError("connection refused")
+
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:9")
+    monkeypatch.setattr(llm.urllib.request, "urlopen", refused)
+    assert [llm.ollama_available() for _ in range(5)] == [False] * 5
+    assert len(calls) == 1, "one probe, then the remembered answer"
+
+    clock = [llm.time.monotonic()]
+    monkeypatch.setattr(llm.time, "monotonic", lambda: clock[0])
+    clock[0] += llm._OLLAMA_PROBE_TTL_S + 1
+    llm.ollama_available()
+    assert len(calls) == 2, "asked again once the answer is old"
+
+
+def test_each_ollama_host_is_probed_on_its_own(monkeypatch):
+    from brahmastra import llm
+
+    seen = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen",
+                        lambda url, timeout: seen.append(url) or (_ for _ in ()).throw(OSError()))
+    for host in ("http://127.0.0.1:9", "http://127.0.0.1:10"):
+        monkeypatch.setenv("OLLAMA_HOST", host)
+        llm.ollama_available()
+    assert len(seen) == 2

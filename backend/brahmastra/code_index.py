@@ -212,8 +212,11 @@ def chunk_file(path: str, source: str) -> list[Chunk]:
 
 def tracked_files(root: Path = REPO_ROOT) -> list[str]:
     """Paths git tracks, relative to root, forward slashes."""
+    # stdin of its own: inheriting the MCP server's stdin pipe is what froze it
+    # (see version._git_commit).
     result = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True,
-                            text=True, encoding="utf-8", check=True)
+                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                            check=True)
     return [p for p in result.stdout.splitlines()
             if Path(p).suffix.lower() in LANGUAGES and not _SKIP.search(p)]
 

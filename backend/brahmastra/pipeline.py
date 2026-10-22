@@ -9,8 +9,11 @@ Called by:
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
+import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -393,6 +396,86 @@ def run_pipeline(full: bool = False, graph_only: bool = False) -> dict[str, Any]
         # hit the engine on its way there, and `record_contact` never raises.
         from brahmastra.keepalive import record_contact
         record_contact()
+
+
+# ---------------------------------------------------------------------------
+# Runs that do not hold the caller
+# ---------------------------------------------------------------------------
+#
+# The MCP SDK runs a synchronous tool on the server's event loop, so a tool that
+# runs the pipeline holds the WHOLE server for the length of the run: no other
+# call, no ping, no cancellation is read until it returns. A healthy run takes
+# about a minute; anything that stalls one (a hung subprocess did, for 30
+# minutes at a time -- see version._git_commit) stalls every agent on that
+# server, and the client can only give up. So the tool starts a run here and
+# returns, and get_graph_stats reports when it is done.
+#
+# The same mechanism keeps the graph current after brahmastra_add_note, which
+# removes the "and now call run_pipeline" step agents were asked to remember
+# after every note -- the step that kept running into the stall.
+
+_log = logging.getLogger(__name__)
+_background: dict[str, threading.Thread] = {}
+_background_guard = threading.Lock()
+# A refresh goes round again when notes arrived during it, at most this often:
+# a steady stream of notes must not keep a thread rebuilding forever.
+_MAX_FOLLOW_UPS = 2
+
+
+def run_in_background(full: bool = False, graph_only: bool = False,
+                      delay_s: float = 0.0) -> dict[str, Any]:
+    """
+    Start a pipeline run on a thread and return at once.
+
+    One background run per graph (store and workspace): asking again while one
+    is scheduled or running returns {"started": False} -- that run will see the
+    new work, or go round once more for it. The thread runs in a COPY of the
+    caller's context, so the workspace and identity a request bound are the
+    ones the run uses; a bare thread would start with neither and build
+    `default` for a caller who asked about another workspace.
+
+    `delay_s` lets several notes stored in quick succession share one rebuild.
+    """
+    key = _lock_path().name
+    with _background_guard:
+        running = _background.get(key)
+        if running is not None and running.is_alive():
+            return {"started": False,
+                    "reason": "a run for this graph is already scheduled or running"}
+        context = contextvars.copy_context()
+
+        def work() -> None:
+            try:
+                if delay_s:
+                    time.sleep(delay_s)
+                context.run(_run_until_current, full, graph_only)
+            except Exception:                                # noqa: BLE001
+                _log.exception("background pipeline run failed")
+            finally:
+                with _background_guard:
+                    if _background.get(key) is threading.current_thread():
+                        del _background[key]
+
+        thread = threading.Thread(target=work, name=f"pipeline-{key}", daemon=True)
+        _background[key] = thread
+        thread.start()
+    return {"started": True,
+            "mode": "graph" if graph_only else "full" if full else "incremental"}
+
+
+def _run_until_current(full: bool, graph_only: bool) -> None:
+    """Run, then run again (graph only) while notes arrived during the run."""
+    run_pipeline(full=full, graph_only=graph_only)
+    for _ in range(_MAX_FOLLOW_UPS):
+        if dirty_since() is None or active_run():
+            return
+        run_pipeline(graph_only=True)
+
+
+def background_runs() -> list[str]:
+    """Which graphs have a background run scheduled or running (for tests)."""
+    with _background_guard:
+        return [k for k, t in _background.items() if t.is_alive()]
 
 
 def _missing_notion_config(need_database: bool) -> list[str]:

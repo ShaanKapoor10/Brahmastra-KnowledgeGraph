@@ -403,14 +403,31 @@ def _is_model_missing(exc: Exception) -> bool:
 # Provider selection
 # ---------------------------------------------------------------------------
 
+# The answer, per host, for a short while. Every chat() resolves its provider,
+# and resolving probes Ollama even when LLM_PROVIDER names a cloud one -- twice
+# per call, through chat and _chat_unmeasured. With nothing listening on
+# localhost the probe costs 4.1s on Windows (it tries ::1, then 127.0.0.1), so
+# the entity judge spent ~8s per batch before asking Groq anything; measured on
+# 2026-10-22, it held a rebuild in resolution for minutes. Thirty seconds is
+# long enough to cover a run's burst of calls and short enough that starting
+# `ollama serve` is noticed almost at once.
+_OLLAMA_PROBE_TTL_S = 30.0
+_ollama_probes: dict[str, tuple[float, bool]] = {}
+
+
 def ollama_available() -> bool:
     """Return True if a local Ollama server is reachable."""
+    host = _env("OLLAMA_HOST", OLLAMA_HOST)
+    seen = _ollama_probes.get(host)
+    if seen is not None and time.monotonic() - seen[0] < _OLLAMA_PROBE_TTL_S:
+        return seen[1]
     try:
-        host = _env("OLLAMA_HOST", OLLAMA_HOST)
         with urllib.request.urlopen(f"{host}/api/tags", timeout=5) as resp:
-            return resp.status == 200
+            up = resp.status == 200
     except Exception:
-        return False
+        up = False
+    _ollama_probes[host] = (time.monotonic(), up)
+    return up
 
 
 def _installed(module: str) -> bool:
