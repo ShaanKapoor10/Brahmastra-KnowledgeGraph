@@ -164,9 +164,16 @@ def _process_page(
     counters: dict[str, int],
     errors: list[dict[str, str]],
     projections: frozenset[str] | set[str] = frozenset(),
+    removed: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     page_id = page["id"]
     if page.get("archived") or page.get("in_trash"):
+        return
+    if page_id in removed:
+        # A person removed this page's note (removals.py). The page still
+        # exists in Notion, so without this the next sync pulled it straight
+        # back in. The page itself is never touched.
+        counters["unchanged"] += 1
         return
     if page_id in projections:
         # Our own published page; the note it came from is already in the graph.
@@ -360,6 +367,9 @@ def run_sync() -> dict[str, Any]:
     projections = {
         n["notion_page_id"] for n in existing.values() if n.get("notion_page_id")
     }
+    from brahmastra.removals import removed_ids
+
+    removed = removed_ids("notion")
 
     # Decide mode: is target_id a database? Probe once per process, then cache.
     # The probe intentionally fails for page IDs; silence ALL logging around it
@@ -384,7 +394,7 @@ def run_sync() -> dict[str, Any]:
     if is_database:
         mode = "database"
         for page in _iter_database_rows(client, target_id):
-            _process_page(client, page, existing, counters, errors, projections)
+            _process_page(client, page, existing, counters, errors, projections, removed)
     else:
         # Page mode: pull every page the integration can access via search.
         mode = "pages"
@@ -403,7 +413,7 @@ def run_sync() -> dict[str, Any]:
             for page in resp.get("results", []):
                 if page.get("object") != "page":
                     continue
-                _process_page(client, page, existing, counters, errors, projections)
+                _process_page(client, page, existing, counters, errors, projections, removed)
             if not resp.get("has_more"):
                 break
             cursor = resp.get("next_cursor")

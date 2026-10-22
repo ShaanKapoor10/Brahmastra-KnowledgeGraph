@@ -147,7 +147,9 @@ CREATE TABLE IF NOT EXISTS session_overviews (
 _ADDED_COLUMNS = {
     # What kind of session it is (ingest/modes.py). NULL is a meeting: every
     # transcript stored before modes existed was read as one.
-    "transcripts": {"mode": "TEXT"},
+    # Who uploaded it, so a member may remove their own (removals.py). NULL for
+    # sessions stored before it was recorded, and for the service key: an admin's.
+    "transcripts": {"mode": "TEXT", "submitted_by": "TEXT"},
     # What each part was about, from the notes pass.
     "transcript_chunks": {"topic": "TEXT"},
     # What a point is about ([{"name", "type"}], JSON) -- ingest/graph_record.py.
@@ -167,6 +169,7 @@ class Transcript:
     source_ref: str | None = None
     occurred_at: str | None = None
     mode: str | None = None
+    submitted_by: str | None = None
 
 
 def _now() -> str:
@@ -381,11 +384,11 @@ class IngestStore:
                 """
                 INSERT INTO transcripts
                     (id, workspace_id, title, content, source, source_ref,
-                     occurred_at, created_at, status, mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                     occurred_at, created_at, status, mode, submitted_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """),
                 (tid, self.workspace, t.title, t.content, t.source,
-                 t.source_ref, t.occurred_at, _now(), t.mode),
+                 t.source_ref, t.occurred_at, _now(), t.mode, t.submitted_by),
             )
         return tid
 
@@ -402,7 +405,7 @@ class IngestStore:
                          limit: int = 50) -> list[dict[str, Any]]:
         self.init_schema()
         sql = ("SELECT id, title, source, source_ref, occurred_at, created_at, "
-               "status, error, chunk_count, mode FROM transcripts WHERE workspace_id = ?")
+               "status, error, chunk_count, mode, submitted_by FROM transcripts WHERE workspace_id = ?")
         params: list[Any] = [self.workspace]
         if status:
             sql += " AND status = ?"

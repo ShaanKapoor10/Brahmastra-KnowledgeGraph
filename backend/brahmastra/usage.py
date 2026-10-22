@@ -472,6 +472,32 @@ def remember_author(note_id: str) -> None:
         pass
 
 
+def forget_author(note_id: str) -> None:
+    """The note is gone; so is the record of who added it. Never raises."""
+    from brahmastra.workspace import current_workspace
+
+    try:
+        _store().run("DELETE FROM note_authors WHERE workspace_id = ? AND note_id = ?",
+                     (current_workspace(), note_id))
+    except Exception:                                         # noqa: BLE001
+        pass
+
+
+def authors_of(note_ids: list[str]) -> dict[str, str]:
+    """Who added each of these notes, for the ones anybody is recorded against."""
+    from brahmastra.workspace import current_workspace
+
+    if not note_ids:
+        return {}
+    marks = ", ".join("?" for _ in note_ids)
+    try:
+        rows = _store().rows(f"SELECT note_id, user_id FROM note_authors WHERE workspace_id = ? "
+                             f"AND note_id IN ({marks})", (current_workspace(), *note_ids))
+    except Exception:                                         # noqa: BLE001
+        return {}
+    return {r["note_id"]: r["user_id"] for r in rows}
+
+
 def author_of(note_id: str) -> str | None:
     from brahmastra.workspace import current_workspace
 

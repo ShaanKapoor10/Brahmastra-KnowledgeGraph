@@ -48,6 +48,7 @@ async function loadFromBackend(workspace: string): Promise<Loaded> {
     content: string
     last_edited: string | null
     extraction_status: string
+    added_by?: string | null
   }> = await notesRes.json()
   const notes: Note[] = backendNotes.map((n) => ({
     id: n.id,
@@ -55,6 +56,7 @@ async function loadFromBackend(workspace: string): Promise<Loaded> {
     content: n.content,
     lastEdited: n.last_edited ?? n.id,
     extractionStatus: n.extraction_status as Note["extractionStatus"],
+    addedBy: n.added_by ?? null,
   }))
 
   const [triplesRes, graphRes] = await Promise.all([

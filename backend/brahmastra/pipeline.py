@@ -305,12 +305,18 @@ def run_state() -> dict[str, Any]:
     }
 
 
-def run_pipeline(full: bool = False) -> dict[str, Any]:
+def run_pipeline(full: bool = False, graph_only: bool = False) -> dict[str, Any]:
     """
     Run the full pipeline.
 
     full=True  → re-extract ALL notes (forces re-analysis).
     full=False → incremental: only extract notes with status='pending'.
+    graph_only → rebuild the graph from the facts already stored: resolve,
+                 build, summarise, cache. No Notion sync or write-back, no
+                 checkpoint drain, no extraction -- nothing that reaches
+                 outside or reads a note with a model. What a removal needs
+                 (removals.refresh_graph): the facts are already gone, only
+                 the graph built from them is behind.
 
     Returns a summary dict suitable for both the API response and CLI display.
     If another run holds the lock, returns immediately with {"skipped": ...}.
@@ -320,7 +326,7 @@ def run_pipeline(full: bool = False) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "started_at": started_at,
-        "mode": "full" if full else "incremental",
+        "mode": "graph" if graph_only else "full" if full else "incremental",
         # Which code produced this result. A run from a process holding stale
         # modules -- the MCP server, most often -- reports numbers that look as
         # authoritative as any other; `stale: true` is how they stop looking so.
@@ -345,7 +351,8 @@ def run_pipeline(full: bool = False) -> dict[str, Any]:
         from brahmastra.workspace import current_workspace
 
         with usage.charging(workspace=current_workspace(), purpose="graph"):
-            outcome = _run_pipeline_locked(full, result)
+            outcome = (_run_pipeline_locked(full, result, graph_only=True) if graph_only
+                       else _run_pipeline_locked(full, result))
         try:
             from brahmastra import metrics
 
@@ -451,12 +458,14 @@ def _timed(result: dict[str, Any], stage: str, fn, *args, **kwargs):
         result.setdefault("timings_s", {})[stage] = round(time.perf_counter() - started, 2)
 
 
-def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
+def _run_pipeline_locked(full: bool, result: dict[str, Any], graph_only: bool = False) -> dict[str, Any]:
     # ---------------------------------------------------------------
     # Stage 0: Notion sync (pull needs both the token and a target)
     # ---------------------------------------------------------------
     missing = _missing_notion_config(need_database=True)
-    if not missing:
+    if graph_only:
+        result["stages"]["sync"] = {"skipped": "graph-only rebuild"}
+    elif not missing:
         try:
             from brahmastra.sync import run_sync
             sync_result = run_sync()
@@ -476,20 +485,24 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     # while Ollama was down and Groq was rate limited still lands, and lands
     # BEFORE extract so it is graphed in the same run.
     # ---------------------------------------------------------------
-    try:
-        from brahmastra.checkpoint import drain, pending_count
-        if pending_count():
-            result["stages"]["checkpoints"] = drain()
-    except Exception as exc:
-        result["stages"]["checkpoints"] = {"error": str(exc)}
+    if not graph_only:
+        try:
+            from brahmastra.checkpoint import drain, pending_count
+            if pending_count():
+                result["stages"]["checkpoints"] = drain()
+        except Exception as exc:
+            result["stages"]["checkpoints"] = {"error": str(exc)}
 
     # ---------------------------------------------------------------
     # Stage 1: extract
     # ---------------------------------------------------------------
-    from brahmastra.extraction import run_extraction
+    if graph_only:
+        result["stages"]["extract"] = {"skipped": "graph-only rebuild"}
+    else:
+        from brahmastra.extraction import run_extraction
 
-    extract_result = _timed(result, "extract", run_extraction, full=full)
-    result["stages"]["extract"] = extract_result
+        extract_result = _timed(result, "extract", run_extraction, full=full)
+        result["stages"]["extract"] = extract_result
 
     # ---------------------------------------------------------------
     # Stage: meeting records (full rebuilds only)
@@ -572,7 +585,9 @@ def _run_pipeline_locked(full: bool, result: dict[str, Any]) -> dict[str, Any]:
     extraction_collapsed = bool(extract.get("errors")) and not extract.get("extracted")
 
     missing = _missing_notion_config(need_database=False)
-    if missing:
+    if graph_only:
+        result["stages"]["notion_writeback"] = {"skipped": "graph-only rebuild"}
+    elif missing:
         result["stages"]["notion_writeback"] = {"skipped": f"not set: {', '.join(missing)}"}
     elif extraction_collapsed:
         result["stages"]["notion_writeback"] = {

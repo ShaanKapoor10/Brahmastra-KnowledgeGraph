@@ -8,6 +8,8 @@ export interface Note {
   content: string
   lastEdited: string // ISO timestamp
   extractionStatus: ExtractionStatus
+  /** Who added it (a user id), when anyone is recorded against it. */
+  addedBy?: string | null
 }
 
 /** A fact extracted from a note. Subject/object are raw mention strings here. */

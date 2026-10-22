@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from brahmastra.ingest import assemble
@@ -100,7 +100,7 @@ async def submit_transcript(
     tid = store.create_transcript(Transcript(
         id="", title=body.title, content=body.content, source=body.source,
         source_ref=body.source_ref, occurred_at=body.occurred_at,
-        mode=_checked_mode(body.mode),
+        mode=_checked_mode(body.mode), submitted_by=_submitter(),
     ))
     background_tasks.add_task(_launch, tid, workspace, _submitter())
     return {"transcript_id": tid, "status": "pending", "workspace": workspace,
@@ -149,7 +149,7 @@ async def upload_transcript(
     tid = store.create_transcript(Transcript(
         id="", title=title.strip() or name, content=text,
         source="upload", source_ref=name, occurred_at=occurred_at or None,
-        mode=chosen,
+        mode=chosen, submitted_by=_submitter(),
     ))
     background_tasks.add_task(_launch, tid, workspace, _submitter())
     return {"transcript_id": tid, "status": "pending", "workspace": workspace,
@@ -241,7 +241,7 @@ async def reprocess(transcript_id: str,
 
 
 @router.delete("/transcripts/{transcript_id}")
-async def delete_transcript(transcript_id: str,
+async def delete_transcript(transcript_id: str, request: Request, background_tasks: BackgroundTasks,
                             purge_notes: bool = False) -> dict[str, Any]:
     """
     Removes the transcript, its chunks and its artifacts.
@@ -251,12 +251,22 @@ async def delete_transcript(transcript_id: str,
     ordinary notes nothing will rewrite or remove. Deleting a transcript
     deletes the source, so unlike a re-ingestion nothing can recompute them
     afterwards; see `assemble.drop_transcript` for the two shapes.
+
+    Admins may remove any meeting, members only the ones they uploaded, and
+    every removal is audited (brahmastra/removals.py).
     """
-    store = get_ingest_store()
-    if store.get_transcript(transcript_id) is None:
-        raise HTTPException(status_code=404, detail=f"no transcript {transcript_id!r}")
-    return assemble.drop_transcript(transcript_id, store=store,
-                                    purge_notes=purge_notes)
+    from brahmastra import removals
+
+    actor, ip = removals.who(request)
+    try:
+        result = removals.remove_meeting(transcript_id, purge_notes=purge_notes,
+                                         actor=actor, ip=ip, store=get_ingest_store())
+    except removals.NotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except removals.NotAllowed as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    background_tasks.add_task(removals.refresh_graph, current_workspace())
+    return result
 
 
 @router.get("/artifacts")

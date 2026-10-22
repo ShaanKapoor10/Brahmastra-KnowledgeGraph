@@ -86,6 +86,15 @@ in to that explicitly.
 **Deletion is complete.** Deleting a note or a workspace removes its derived rows from
 the graph store first, then the source rows.
 
+**Removing is owned and audited** (`removals.py`). Admins can remove any note or
+meeting; members can remove the notes they added and the meetings they uploaded. Each
+removal is written to the audit log. Removing a meeting keeps the notes made from it by
+default, or removes them too if asked. A note that came from Notion is also kept out of
+later syncs, so it doesn't come back; the Notion page itself is never changed. After a
+removal the workspace's graph is rebuilt in the background from the facts that remain,
+without syncing, extracting or writing anything back, so the removed item leaves the
+entities, topics and answers within a minute or two.
+
 **Every derived row has an owner** (`ownership.py`). A ledger records which source wrote
 which notes, chunks and items, with a fingerprint of each. Re-ingesting a source applies
 three rules:

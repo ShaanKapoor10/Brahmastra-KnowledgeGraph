@@ -22,7 +22,7 @@ import { AccountPanel } from "@/components/panels/account-panel"
 import { TeamPanel } from "@/components/panels/team-panel"
 import { UsagePanel } from "@/components/panels/usage-panel"
 import { PlanLocked } from "@/components/plan-lock"
-import { can } from "@/lib/plans"
+import { can, mayRemove } from "@/lib/plans"
 import { Workflow, Network, TrendingUp, Boxes, TriangleAlert, GitMerge, Sparkles, FileText, Play, Loader2, MessageCircleQuestion, CalendarDays, Stethoscope, UserCog, Users, Gauge } from "lucide-react"
 
 type View =
@@ -49,6 +49,8 @@ const TABS: { id: View; label: string; icon: React.ElementType }[] = [
 export interface SignedInUser {
   kind: "session" | "token" | "service" | "anonymous"
   role: "viewer" | "member" | "admin"
+  /** Null for the service key and anonymous development mode. */
+  user_id?: string | null
   email: string | null
   name: string | null
   /** The workspaces this person may open; null means every workspace (admins). */
@@ -231,8 +233,14 @@ export function Dashboard({
   }
 
   const addNote = (note: Note, newTriples: RawTriple[]) => {
-    setNotes((n) => [note, ...n])
+    setNotes((n) => [{ ...note, addedBy: note.addedBy ?? user?.user_id ?? null }, ...n])
     setTriples((t) => [...t, ...newTriples])
+    setLocalNotesAdded(true)
+  }
+
+  const removeNote = (id: string) => {
+    setNotes((n) => n.filter((x) => x.id !== id))
+    setTriples((t) => t.filter((x) => x.sourceNoteId !== id))
     setLocalNotesAdded(true)
   }
 
@@ -389,8 +397,8 @@ export function Dashboard({
                 )}
                 {view === "links" && <PredictedLinks links={result.predictedLinks} onSelect={select} />}
                 {view === "resolution" && <EntityResolution resolution={result.resolution} onSelect={select} />}
-                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} workspace={workspace} backendAvailable={backendAvailable} canAdd={can(user, "add_notes")} />}
-                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} canAdd={can(user, "meetings")} />}
+                {view === "notes" && <NotesPanel notes={notes} triples={triples} onAddNote={addNote} onRemoved={removeNote} canRemove={(owner) => backendAvailable && mayRemove(user, owner)} workspace={workspace} backendAvailable={backendAvailable} canAdd={can(user, "add_notes")} />}
+                {view === "meetings" && <MeetingsPanel workspace={workspace} workspaces={workspaces} backendAvailable={backendAvailable} canAdd={can(user, "meetings")} canRemove={(owner) => mayRemove(user, owner)} />}
                 {view === "diagnostics" && <DiagnosticsPanel workspace={workspace} backendAvailable={backendAvailable} />}
                 {view === "account" && user && <AccountPanel user={user} />}
                 {view === "team" && user?.role === "admin" && <TeamPanel user={user} workspaces={workspaces} />}
