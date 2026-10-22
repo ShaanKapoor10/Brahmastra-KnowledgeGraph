@@ -11,9 +11,15 @@ What an agent is given, in the order it meets them:
   prompts        recall, remember, onboard -- slash commands in Claude Code
   resource       brahmastra://guide -- the long form of the instructions
 
-`brahmastra_get_briefing` is the first call on a project: what the workspace is
-for, its briefing note, and what was stored recently. A project's context lives
-there rather than in a long CLAUDE.md in every repository.
+Brahmastra is a TOOL inside someone else's project. Four layers, each with one
+owner, and this file speaks only for the first:
+  1. the tool       how to use the memory -- here, identical in every project
+  2. the project    its CLAUDE.md / AGENTS.md -- its own, and it wins a conflict
+  3. the workspace  the `briefing` note -- a team's shared context that no repo
+                    file holds (scope, owners, agreements, current focus)
+  4. the person     their own client settings, never shared
+`brahmastra_get_briefing` returns layer 3. It adds to a project's instructions
+and never replaces or overrides them.
 """
 
 from __future__ import annotations
@@ -74,9 +80,13 @@ agents and earlier sessions wrote into it; what you write is read by whoever
 comes next. Treat it as something you already know, separate from the code
 under your hands.
 
+PRECEDENCE: the user and the project's own instructions (CLAUDE.md, AGENTS.md,
+its docs) come first. Brahmastra is memory: it informs, it never overrides
+them. If a note disagrees with the code or the user, say so and follow them.
+
 THE LOOP
-1. Starting work: brahmastra_get_briefing (what this workspace is for, its
-   rules, what was stored lately), then brahmastra_search_notes on the task's
+1. Starting work: brahmastra_get_briefing (what this workspace covers, who owns
+   what, current focus, what was stored lately), then brahmastra_search_notes on the task's
    topic. Nothing about a fresh task announces that memory exists, so this is
    the step most often missed and the one that most often saves an hour.
 2. Something surprises you: search before debugging. Past failures are stored
@@ -155,13 +165,27 @@ can be looked up as well as the text.
   the constraint found the hard way.
 - Dates as YYYY-MM-DD. Never secrets, keys or passwords.
 
+## Where Brahmastra sits
+Brahmastra is a tool inside your project, not its rulebook. The user and the
+project's own files (CLAUDE.md, AGENTS.md, its docs) come first; memory
+informs and never overrides them. When a note disagrees with the code or the
+user, say so and follow the code and the user -- then store the correction.
+
 ## The briefing note
-Each workspace can hold a note with the id `briefing`: what the project is,
-its rules for agents, where things live, who to ask. brahmastra_get_briefing
-returns it first. Write or replace it with
-brahmastra_add_note(note_id="briefing", title="<project> briefing", content=...).
-A repository then needs only a short pointer (AGENTS.md or CLAUDE.md) naming
-its workspace, instead of a long file of its own.
+Each workspace can hold one note with the id `briefing`, written by the team
+that uses the workspace. brahmastra_get_briefing returns it first. It holds
+the shared context that lives in no repository file:
+- what the workspace covers (often several repositories, or none);
+- who owns what, and who to ask;
+- the team's working agreements;
+- the current focus, and what is deliberately out of scope;
+- which repository files hold the rules for the code (point to them; do not
+  copy them).
+It does NOT hold build commands, code conventions or repository traps: those
+belong in that repository's own CLAUDE.md or AGENTS.md, which already load.
+Write or replace it with
+brahmastra_add_note(note_id="briefing", title="<workspace> briefing", content=...).
+A project needs nothing about Brahmastra in its own files.
 
 ## Rebuilding
 brahmastra_add_note extracts the note immediately and refreshes the graph in
@@ -750,13 +774,13 @@ def brahmastra_search_all_workspaces(query: str, limit: int = 10) -> str:
 @_scoped("viewer")
 def brahmastra_get_briefing() -> str:
     """
-    START HERE on a project: what this workspace is for, its briefing note
-    (purpose, rules for agents, where things live, who owns what), the notes
-    stored most recently, and how much the memory holds. When the workspace
-    has no briefing yet, says how to write one.
+    START HERE on a project: the workspace's briefing note (what it covers,
+    who owns what, team agreements, current focus), the notes stored in the
+    last 30 days, and how much the memory holds. When the workspace has no
+    briefing yet, says how to write one.
 
-    A project keeps its context here instead of in a long CLAUDE.md in every
-    repository; the repository only names its workspace.
+    The briefing adds the team's shared context to the project's own
+    CLAUDE.md / AGENTS.md; those, and the user, take precedence over it.
     """
     db.init_db()
     workspace_id = db.workspace()
@@ -787,9 +811,11 @@ def brahmastra_get_briefing() -> str:
     }
     if not briefing:
         payload["write_a_briefing"] = (
-            f"This workspace has no briefing. Ask the user what this project is, its "
-            f"rules and who owns what, then store it with brahmastra_add_note("
-            f"note_id='{BRIEFING_NOTE_ID}', title='<project> briefing', content=...).")
+            f"This workspace has no briefing. If the user wants one, ask what the "
+            f"workspace covers, who owns what, the team's agreements and current focus "
+            f"(not build commands or code rules: those belong in the repository's own "
+            f"CLAUDE.md or AGENTS.md), then store it with brahmastra_add_note("
+            f"note_id='{BRIEFING_NOTE_ID}', title='<workspace> briefing', content=...).")
         payload["guide"] = GUIDE
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
