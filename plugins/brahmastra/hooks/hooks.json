@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:brahmastra:brahmastra",
+            "tool": "brahmastra_get_briefing",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

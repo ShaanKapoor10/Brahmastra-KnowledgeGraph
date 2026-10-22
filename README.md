@@ -303,7 +303,7 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 
 | Tool | What it does |
 |:--|:--|
-| `brahmastra_get_briefing` | Start on a project: its purpose, rules and what was stored lately |
+| `brahmastra_get_briefing` | Start on a project: the team's briefing and what was stored lately |
 | `brahmastra_search_notes` | Recall what was decided, fixed or learned about any topic |
 | `brahmastra_add_note` | Remember something, searchable immediately |
 | `brahmastra_search_entities` | Find a person, project or file and its connections |
@@ -316,6 +316,21 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 | `brahmastra_list_workspaces` | See every workspace |
 | `brahmastra_create_workspace` | Start a new, isolated graph |
 | `brahmastra_search_all_workspaces` | Search across workspaces, when you ask for it |
+
+</div>
+
+<br><br>
+
+<h2 align="center">Connect <em>your agent</em></h2>
+
+<div align="center">
+
+**Claude Code:** `/plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then `/plugin install brahmastra@brahmastra`
+
+**Codex, Cursor, Gemini CLI and others:** `npx skills add ShaanKapoor10/Brahmastra-KnowledgeGraph --skill brahmastra`
+
+Your project keeps its own CLAUDE.md or AGENTS.md; nothing about Brahmastra goes in it.
+Details: [plugins/brahmastra](plugins/brahmastra/README.md).
 
 </div>
 
