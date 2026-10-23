@@ -218,8 +218,24 @@ def test_the_password_is_not_in_describe():
     shown = s.describe()
 
     assert "hunter2swordfish" not in shown, "the password must never be rendered"
-    assert "someuser:***@" in shown, "mask in place, user still identifiable"
+    assert "someuser@" in shown, "the user stays identifiable"
     assert "db.example:5432/notes" in shown, "the target must stay diagnosable"
+
+
+@pytest.mark.parametrize("conninfo", [
+    # Masking split on the FIRST "@", so this printed "Zq9@x7".
+    "postgresql://someuser:hunter2%40Zq9@db.example:5432/notes",
+    "postgresql://someuser:hunter2@Zq9@db.example:5432/notes",
+    # Neither of these was recognised at all.
+    "host=db.example port=5432 user=someuser password=hunter2Zq9 dbname=notes",
+    "postgresql://db.example:5432/notes?user=someuser&password=hunter2Zq9",
+])
+def test_no_connection_string_form_leaks_the_password(conninfo):
+    """CodeQL py/clear-text-logging-sensitive-data (2026-10-23) found the masking."""
+    from brahmastra.stores.postgres_store import describe_dsn
+
+    shown = describe_dsn(conninfo)
+    assert "hunter2" not in shown and "Zq9" not in shown, shown
 
 
 @needs_pg
