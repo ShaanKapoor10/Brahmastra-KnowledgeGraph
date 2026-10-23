@@ -42,12 +42,22 @@ from `.git` files, never by a process. **Any subprocess reachable from the MCP s
 must pass `stdin=subprocess.DEVNULL`.** Find the right server PID by its parent: each
 Claude session starts its own, and a stale one from yesterday may be the one you're on.
 
-### Available MCP tools (13)
+### Agents do not use memory unless something puts it in front of them (measured)
+`evals/agent/run.py` runs real Claude Code sessions on an invented project against a
+throwaway Brahmastra. With the server alone, or the skill, agents recalled by their own
+choice in 1 of 24 sessions and went ahead with a change the stored decision forbade;
+the plugin's hooks (`UserPromptSubmit` recall, `Stop` store check, both through
+`brahmastra_recall`) took that to 2/2 and stored exactly the decision that needed
+storing, on Haiku and Sonnet. Read `evals/agent/README.md` before changing the hooks,
+the instructions or the skill, and rerun it after. An MCP hook's result reaches the model
+ONLY as JSON `hookSpecificOutput.additionalContext`; plain text arrives as "completed".
+
+### Available MCP tools (14)
 
 Use the PRODUCTION Brahmastra MCP (`brahmastra_*` from the Brahmastra plugin) for memory.
 A `brahmastra-test` server exists for the Haiku experiment and is not plugged in; never
 store memory there.
-Core: `brahmastra_get_briefing`, `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
+Core: `brahmastra_get_briefing`, `brahmastra_recall` (for hooks), `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
 `brahmastra_search_sessions`, `brahmastra_search_code`,
 `brahmastra_get_entity_details`, `brahmastra_get_graph_stats`,
 `brahmastra_get_contradictions`, `brahmastra_run_pipeline`.

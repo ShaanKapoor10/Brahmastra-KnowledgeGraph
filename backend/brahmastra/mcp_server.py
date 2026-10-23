@@ -7,7 +7,7 @@ Run:
 
 What an agent is given, in the order it meets them:
   instructions   sent on connect; the loop and which tool to use (INSTRUCTIONS)
-  tools          13, each labelled read-only or not (tests/test_mcp_server.py)
+  tools          14, each labelled read-only or not (tests/test_mcp_server.py)
   prompts        recall, remember, onboard -- slash commands in Claude Code
   resource       brahmastra://guide -- the long form of the instructions
 
@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -156,6 +157,7 @@ can be looked up as well as the text.
 | list_workspaces | which graphs exist and which is active |
 | create_workspace | a new, fully separate graph (admins) |
 | search_all_workspaces | search every workspace you may open |
+| recall | for client hooks: recalled notes shaped as a hook result |
 
 ## Writing notes
 - One topic per note, with a title a stranger would search for.
@@ -818,6 +820,104 @@ def brahmastra_get_briefing() -> str:
             f"note_id='{BRIEFING_NOTE_ID}', title='<workspace> briefing', content=...).")
         payload["guide"] = GUIDE
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+RECALL_NOTES = 4
+RECALL_SNIPPET = 360
+
+# Words in an agent's last message that suggest the turn settled something a
+# teammate will need: a decision, a root cause, a declined request, a changed
+# requirement. A cheap gate, so an ordinary "added the function" turn ends
+# without an extra step; the agent, which has the whole conversation, makes
+# the actual call. Replaced a prompt-type Stop hook (a separate model judging
+# from the last message alone): it errored in practice, and Claude Code then
+# showed the agent the hook's own instructions, which the agent answered with
+# {"ok": true} as its final reply (measured 2026-10-23).
+_SETTLED = re.compile(
+    r"\b(decid\w*|decision|because|reason|root cause|the (issue|problem|cause) was|caused by|"
+    r"instead of|declin\w*|can't proceed|cannot proceed|won't|should not|must not|"
+    r"drop\w*|deprecat\w*|no longer|policy|requirement|constraint|agreed|sign-off)\b", re.I)
+
+
+# The request that started each session's current turn. A Stop hook is told
+# only the agent's last message, and a decision's reason is often in the
+# request instead ("drop 3.9: it is end-of-life"), so judging the reply alone
+# missed it every time (2026-10-23). Process-local and bounded: a reminder it
+# cannot make is a missed nudge, never an error.
+_LAST_REQUEST: dict[str, str] = {}
+_LAST_REQUEST_MAX = 512
+
+
+def _remember_request(session: str, prompt: str) -> None:
+    _LAST_REQUEST.pop(session, None)
+    _LAST_REQUEST[session] = (prompt or "")[:4000]
+    while len(_LAST_REQUEST) > _LAST_REQUEST_MAX:
+        _LAST_REQUEST.pop(next(iter(_LAST_REQUEST)))
+
+
+def _store_reminder(last_message: str, active: str) -> str:
+    if active.strip().lower() == "true" or not _SETTLED.search(last_message or ""):
+        return ""
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": (
+        "Brahmastra: if this turn settled something a teammate will need later that the code "
+        "and git history cannot tell them (a decision and its reason, a root cause, a changed "
+        "requirement, a constraint, a request declined and why), store it now with "
+        "brahmastra_add_note, unless it is already stored or was recalled from Brahmastra. "
+        "Do not store summaries of code you wrote. Then end your turn with one sentence "
+        "telling the user what you did.")}})
+
+
+@mcp.tool(annotations=READS)
+@_scoped("viewer")
+def brahmastra_recall(prompt: str = "", event: str = "UserPromptSubmit", active: str = "",
+                      session: str = "") -> str:
+    """
+    For client hooks, not for agents: recalled memory shaped as a Claude Code
+    hook result. Agents use brahmastra_search_notes and brahmastra_get_briefing.
+
+    event=UserPromptSubmit: the notes matching `prompt`.
+    event=SessionStart: the workspace briefing, after a compaction.
+    event=Stop: `prompt` is the agent's last message; a one-line reminder to
+    store what it settled, once per turn (`active` is stop_hook_active).
+    `session` lets the Stop check also read the request that started the turn.
+    """
+    if event == "Stop":
+        return _store_reminder(f"{prompt} {_LAST_REQUEST.get(session, '')}", active)
+    if event == "UserPromptSubmit" and session:
+        _remember_request(session, prompt)
+    # Why a separate tool: Claude Code hands an MCP hook's result to the
+    # model only when it is JSON with hookSpecificOutput.additionalContext.
+    # Plain text -- what every other tool returns -- reaches it as the bare
+    # word "completed". Measured 2026-10-23: the plugin's recall hook ran,
+    # fetched the right notes, and the agent never saw them. That is also
+    # why "Brahmastra memory" opens the text: it says where it came from and
+    # that the project's own files outrank it.
+    db.init_db()
+    if event == "SessionStart":
+        briefing = db.get_note(BRIEFING_NOTE_ID)
+        if not briefing:
+            return ""
+        body = f"## {briefing.get('title')}\n{briefing.get('content')}"
+        head = "Brahmastra memory: this workspace's briefing, re-read after compaction."
+    else:
+        query = " ".join(prompt.split())[:500]
+        if len(query) < 8:
+            return ""
+        notes = [n for n in db.search_notes(query, limit=RECALL_NOTES)]
+        if not notes:
+            return ""
+        lines = []
+        for n in notes:
+            text = " ".join((n.get("content") or "").split())
+            text = text if len(text) <= RECALL_SNIPPET else text[:RECALL_SNIPPET] + "..."
+            lines.append(f"- {n.get('title')} (note {n.get('id')}): {text}")
+        body = "\n".join(lines)
+        head = ("Brahmastra memory recalled for this request (the team's stored notes; some may "
+                "be unrelated). The user and the project's own files come first; use "
+                "brahmastra_search_notes for more.")
+    return json.dumps({"hookSpecificOutput": {"hookEventName": event,
+                                              "additionalContext": f"{head}\n{body}"}},
+                      ensure_ascii=False)
 
 
 # Prompts appear as slash commands (/brahmastra:recall in Claude Code) and the

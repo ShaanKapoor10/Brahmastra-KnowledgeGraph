@@ -23,7 +23,9 @@ The plugin adds:
 |---|---|
 | MCP server | The `brahmastra_*` tools, the `recall`, `remember` and `onboard` prompts, and the `brahmastra://guide` resource |
 | Skill `brahmastra:brahmastra` | When to use the memory, and how to connect when the tools are missing |
-| Hook | After each compaction, re-reads the workspace briefing, when a long session has drifted furthest from it |
+| Hooks | On every request, the notes matching it are put in front of the model; when the agent stops, it is reminded to store a decision, root cause or declined request it settled; after a compaction, the briefing comes back |
+
+The hooks are what make the memory get used. Measured in `evals/agent`: with the server alone, agents almost never looked, and went ahead with a change the team had decided against. With the hooks, they declined it and stored the new decisions, and only those.
 
 ## Codex, Cursor, Gemini CLI and other agents
 

@@ -37,6 +37,7 @@ EXPECTED = {
     "brahmastra_create_workspace",
     "brahmastra_search_all_workspaces",
     "brahmastra_get_briefing",
+    "brahmastra_recall",
 }
 
 
@@ -278,3 +279,56 @@ def test_the_stage_modules_are_imported_before_the_event_loop_starts():
                    "brahmastra.concept_graph", "brahmastra.cluster_summary",
                    "notion_client", "community", "jellyfish"):
         assert f'"{module}"' in source, module
+
+
+# ---------------------------------------------------------------------------
+# Recall for hooks: only JSON additionalContext reaches the model
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-10-23: a plugin hook calling brahmastra_search_notes ran and
+# fetched the right notes, and the agent saw only "UserPromptSubmit completed".
+# Claude Code passes an MCP hook's result to the model only as JSON with
+# hookSpecificOutput.additionalContext.
+
+def test_recall_returns_what_a_hook_can_deliver(store):
+    store.upsert_note("keep-due", "Decision: keep the field named due",
+                      "The mobile app parses the key due; renaming Task.due breaks it.", mark_pending=False)
+    out = json.loads(_server().brahmastra_recall(prompt="rename the due field to due_at"))
+    hook = out["hookSpecificOutput"]
+    assert hook["hookEventName"] == "UserPromptSubmit"
+    assert "keep the field named due" in hook["additionalContext"]
+    assert "project's own files come first" in hook["additionalContext"]
+
+
+def test_recall_after_compaction_brings_back_the_briefing(store):
+    store.upsert_note("briefing", "Acme briefing", "Releases go out on Tuesdays.", mark_pending=False)
+    out = json.loads(_server().brahmastra_recall(event="SessionStart"))
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert "Tuesdays" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_recall_adds_nothing_when_there_is_nothing_to_add(store):
+    assert _server().brahmastra_recall(prompt="ok") == ""
+    assert _server().brahmastra_recall(prompt="something nobody ever wrote about zqxj") == ""
+    assert _server().brahmastra_recall(event="SessionStart") == "", "no briefing, no injection"
+
+
+def test_stop_reminds_once_and_only_when_something_was_settled(store):
+    settled = "I can't proceed: the team decided to keep the field named due because the mobile app parses it."
+    out = json.loads(_server().brahmastra_recall(prompt=settled, event="Stop", active="false"))
+    assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
+    assert "brahmastra_add_note" in out["hookSpecificOutput"]["additionalContext"]
+    assert _server().brahmastra_recall(prompt=settled, event="Stop", active="true") == "",         "a turn already continued by this hook must be allowed to end"
+    assert _server().brahmastra_recall(prompt="Added overdue() to larkspur/core.py and exported it.",
+                                       event="Stop", active="false") == "", "routine work costs no extra step"
+
+
+def test_stop_also_reads_the_request_that_started_the_turn(store):
+    """The reason for a decision is often only in the request; the reply just says "done"."""
+    _server().brahmastra_recall(prompt="Drop Python 3.9: it is end-of-life.", event="UserPromptSubmit",
+                                session="s-1")
+    out = _server().brahmastra_recall(prompt="Done. Updated requires-python to >=3.10.", event="Stop",
+                                      active="false", session="s-1")
+    assert "brahmastra_add_note" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert _server().brahmastra_recall(prompt="Done. Updated requires-python to >=3.10.", event="Stop",
+                                       active="false", session="other") == ""

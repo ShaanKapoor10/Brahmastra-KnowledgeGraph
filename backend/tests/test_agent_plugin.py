@@ -91,3 +91,13 @@ def test_the_briefing_hook_runs_after_compaction_not_at_launch():
     long session has drifted furthest from the rules (arXiv 2605.10039)."""
     groups = _json(PLUGIN / "hooks" / "hooks.json")["hooks"]["SessionStart"]
     assert [g["matcher"] for g in groups] == ["compact"]
+
+
+def test_every_mcp_hook_calls_the_tool_shaped_for_hooks():
+    """Only JSON additionalContext reaches the model from an MCP hook; every
+    other tool returns plain text, which arrives as the word "completed"."""
+    for event in _json(PLUGIN / "hooks" / "hooks.json")["hooks"].values():
+        for group in event:
+            for hook in group["hooks"]:
+                if hook["type"] == "mcp_tool":
+                    assert hook["tool"] == "brahmastra_recall", hook
