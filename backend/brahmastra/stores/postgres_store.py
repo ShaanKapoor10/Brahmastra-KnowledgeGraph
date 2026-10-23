@@ -81,6 +81,34 @@ def dsn() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 
+def describe_dsn(conninfo: str) -> str:
+    """
+    Where a connection string points, with no secret in it.
+
+    describe() lands in logs, health payloads and console output, so it is
+    BUILT from the parsed settings that name a target, never derived from the
+    raw string by masking. Masking was tried and leaked: it split on the first
+    "@", so a password containing "@" printed its tail, and a key-value DSN
+    (`host=... password=...`) or `?password=` was not recognised at all
+    (CodeQL py/clear-text-logging-sensitive-data, 2026-10-23).
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        parts = conninfo_to_dict(conninfo)
+    except Exception:                                    # noqa: BLE001
+        return "postgresql://(unparseable connection string)"
+    user = parts.get("user") or ""
+    host = parts.get("host") or parts.get("hostaddr") or "localhost"
+    if "@" in host:
+        # An unencoded "@" in a URL password: libpq splits on the first one,
+        # so the password's tail lands here. No real hostname contains "@".
+        return "postgresql://(unparseable connection string)"
+    port = parts.get("port") or "5432"
+    database = parts.get("dbname") or user
+    return f"postgresql://{user + '@' if user else ''}{host}:{port}/{database}"
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workspaces (
     id           TEXT PRIMARY KEY,
@@ -197,15 +225,7 @@ class PostgresStore(GraphStore):
         self._conn = None
 
     def describe(self) -> str:
-        # Never render the password: describe() lands in logs, health payloads
-        # and the composite's own describe().
-        safe = self._dsn
-        if "@" in safe and "//" in safe:
-            scheme, rest = safe.split("//", 1)
-            creds, host = rest.split("@", 1)
-            user = creds.split(":", 1)[0]
-            safe = f"{scheme}//{user}:***@{host}"
-        return f"postgres:{safe}#{self.workspace}"
+        return f"postgres:{describe_dsn(self._dsn)}#{self.workspace}"
 
     # -- capabilities ------------------------------------------------------
 
