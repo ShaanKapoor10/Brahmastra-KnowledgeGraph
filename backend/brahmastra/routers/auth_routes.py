@@ -6,6 +6,7 @@ Accounts over HTTP: sign in, personal API tokens, and (for admins) users.
     POST   /auth/login                  open: email + password -> session token
     POST   /auth/logout                 end this session
     GET    /auth/me                     who am I
+    GET    /auth/me/connect             what an agent needs to reach this install over MCP
     POST   /auth/password               change my password (needs the current one)
     GET    /auth/tokens                 my API tokens (never the secret)
     POST   /auth/tokens                 new token: the secret is returned ONCE
@@ -207,6 +208,58 @@ def logout(request: Request) -> None:
 @router.get("/me")
 def me(request: Request) -> dict[str, Any]:
     return _me(request).public()
+
+
+DEFAULT_MARKETPLACE = "ShaanKapoor10/Brahmastra-KnowledgeGraph"
+
+
+def public_api_url(env: dict[str, str] | None = None) -> str:
+    """
+    This install's API as a client outside it reaches it, without /mcp.
+
+    Only the backend knows: behind Caddy the API lives under PUBLIC_URL/v1,
+    while a backend run on its own answers at localhost:8001, and the dashboard
+    cannot tell which it is in. MCP_PUBLIC_URL overrides both, for anything
+    else (another proxy, another port).
+    """
+    env = dict(os.environ if env is None else env)
+    explicit = env.get("MCP_PUBLIC_URL", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    public = env.get("PUBLIC_URL", "").strip().rstrip("/")
+    return f"{public}/v1" if public else "http://localhost:8001"
+
+
+@router.get("/me/connect")
+def connect_info(request: Request) -> dict[str, Any]:
+    """
+    What a person needs to plug an agent into this install: whether remote MCP
+    is on and their plan allows it, the address, the workspaces they may name,
+    and where the plugin and skill install from. The secret is never part of
+    it: they create a token under API tokens and paste it themselves.
+    """
+    from brahmastra import db
+    from brahmastra.workspace import current_workspace
+
+    me_ = _me(request)
+    server_url = public_api_url()
+    workspaces = [w["id"] for w in db.list_workspaces() if me_.can_open(w.get("id") or "")]
+    active = current_workspace()
+    return {
+        "enabled": os.environ.get("MCP_HTTP", "").strip().lower() in {"1", "true", "yes"},
+        "allowed": me_.has("mcp"),
+        "needs_token": me_.kind != "anonymous",
+        "server_url": server_url,
+        "mcp_url": f"{server_url}/mcp",
+        "workspace_header": "X-Brahmastra-Workspace",
+        "workspaces": workspaces,
+        "workspace": active if active in workspaces else (workspaces[0] if workspaces else None),
+        # Where the plugin and skill install from: this repository until an
+        # organisation forks it, then BRAHMASTRA_MARKETPLACE names their copy.
+        "marketplace": os.environ.get("BRAHMASTRA_MARKETPLACE", "").strip() or DEFAULT_MARKETPLACE,
+        "plugin": "brahmastra@brahmastra",
+        "skill": "brahmastra",
+    }
 
 
 @router.post("/password", status_code=204)

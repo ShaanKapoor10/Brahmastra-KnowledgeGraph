@@ -349,7 +349,8 @@ independently, and they must agree on where the database is.
 ### 2. Remote MCP over HTTP
 
 When a client cannot reach Neo4j directly, or you want a single authenticated
-door, set `MCP_HTTP=1` and the same ten tools are served at `/mcp`, mounted
+door, set `MCP_HTTP=1` and the same tools, prompts and guide are served at `/mcp`
+(`https://DOMAIN/v1/mcp` behind Caddy), mounted
 inside the FastAPI app so they inherit the API's authentication — one boundary,
 not a second unprotected way into the same graph. Verified: `/mcp` returns 401
 without a key. Use your own personal API token (dashboard → **Account**): every
@@ -362,18 +363,30 @@ rebinding protection). It is told this install's own name: the host of
 `PUBLIC_URL`, `DOMAIN`, and localhost; add others with `MCP_ALLOWED_HOSTS`
 (comma-separated). Without this every request through Caddy was refused with 421.
 
+The dashboard gives each person the exact setup: **Account > Connect an agent**
+fills in this install's address and their workspace for Claude Code (plugin or
+one command), Codex, Cursor, Gemini CLI and the cross-agent skill. The address
+comes from `GET /auth/me/connect`: `PUBLIC_URL/v1` here, `MCP_PUBLIC_URL` when
+something else sits in front. `BRAHMASTRA_MARKETPLACE` names the repository the
+plugin and skill install from, so an organisation's fork points at itself. By
+hand, for any client that speaks streamable HTTP:
+
 ```json
 {
   "mcpServers": {
     "brahmastra": {
       "type": "http",
-      "url": "https://your-host/mcp",
-      "headers": { "Authorization": "Bearer bra_YOUR_PERSONAL_TOKEN",
+      "url": "https://DOMAIN/v1/mcp",
+      "headers": { "Authorization": "Bearer ${BRAHMASTRA_TOKEN}",
                    "X-Brahmastra-Workspace": "default" }
     }
   }
 }
 ```
+
+`/v1/mcp` is answered directly. Until 2026-10-22 it was redirected to `/mcp/`,
+and the redirect, built behind Caddy, pointed at `http://DOMAIN/mcp/`: every
+client using this address failed.
 
 Session checkpoint hooks stay local either way — they fire inside a local
 Claude Code session and write through whichever store `.env` selects.
