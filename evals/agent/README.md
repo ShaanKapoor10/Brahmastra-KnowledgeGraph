@@ -43,6 +43,8 @@ Haiku, 2 runs per cell; `rename` and `py310` are the two that need memory:
 
 Sonnet, 1 run: `server` renamed the field and stored nothing; `plugin` declined the rename and stored the Python 3.9 decision.
 
+**Plugin 0.3.0** (hook rules moved to `agent_hooks.py`, briefing on a session's first request), Haiku, 2 runs: the same 8/8 outcomes, `rename` kept `due` 2/2, `py310` stored 2/2, `overdue` stored nothing 2/2. New: one `flaky` session of two stored a note restating the root cause that memory already held, although the reminder says to skip what is already stored. One unneeded note in 8 sessions; watch it on the next run before changing the reminder.
+
 **What this says:**
 
 1. **Agents do not reach for memory on their own,** whatever the instructions say. Across 24 server and skill sessions, one looked. That is the failure that made this project's own CLAUDE.md demand recall in capitals, measured.
