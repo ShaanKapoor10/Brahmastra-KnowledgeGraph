@@ -30,6 +30,7 @@ from brahmastra.env import load_env
 load_env()
 
 from brahmastra import db
+from brahmastra.errors import public_error
 from brahmastra.ontology import (
     ENTITY_TYPE_ALIASES, ENTITY_TYPES, RELATION_NAMES, RELATIONS,
     code_symbol_type, is_valid_triple, normalise_relation,
@@ -842,8 +843,8 @@ def extract_note(note: dict[str, Any]) -> dict[str, Any]:
         with usage.charging(user_id=author, purpose="note"):
             raw = _extract_with_llm(note["title"], note["content"])
     except Exception as e:
-        db.mark_note_error(note_id, str(e))
-        return {"triples_added": 0, "triples_skipped": 0, "error": str(e)}
+        db.mark_note_error(note_id, public_error(e, limit=1000))
+        return {"triples_added": 0, "triples_skipped": 0, "error": public_error(e, limit=1000)}
 
     # BUILD THE REPLACEMENT FIRST. DELETE SECOND.
     #

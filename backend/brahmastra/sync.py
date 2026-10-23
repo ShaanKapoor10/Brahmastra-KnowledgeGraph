@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from brahmastra import db
+from brahmastra.errors import public_error
 
 # The Notion SDK logs (and retries) a WARNING when we probe whether the configured
 # ID is a database — for a page that probe is expected to fail and we handle it by
@@ -186,7 +187,7 @@ def _process_page(
     try:
         content = _page_to_plain_text(client, page_id)
     except Exception as e:
-        errors.append({"page_id": page_id, "title": title, "error": str(e)})
+        errors.append({"page_id": page_id, "title": title, "error": public_error(e)})
         return
 
     # Skip pages with no body text — a title alone has no relationships to graph

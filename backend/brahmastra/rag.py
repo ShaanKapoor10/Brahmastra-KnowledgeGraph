@@ -24,6 +24,7 @@ import re
 from typing import Any
 
 from brahmastra import db
+from brahmastra.errors import public_error
 from brahmastra.llm import chat, llm_available
 
 # ---------------------------------------------------------------------------
@@ -629,5 +630,5 @@ def _answer_question_graph(
             ),
             "entities": [],
             "citations": [],
-            "error": str(e),
+            "error": public_error(e),
         }

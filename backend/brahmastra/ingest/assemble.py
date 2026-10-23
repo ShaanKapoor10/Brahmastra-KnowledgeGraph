@@ -72,6 +72,7 @@ from brahmastra.ingest.consolidate import consolidate
 from brahmastra.ingest.segment import Chunk
 from brahmastra.ingest.store import IngestStore, get_ingest_store
 from brahmastra import ownership
+from brahmastra.errors import public_error
 
 # Headings used in the generated note. Plain words on purpose: the note is read
 # by an extraction prompt, and prose beats a data structure there.
@@ -326,7 +327,7 @@ def _write_graph_record(notes: ownership.Streaming, transcript_id: str,
         return len(triples)
     except Exception as exc:                           # noqa: BLE001
         report["errors"].append(
-            {"stage": "graph_record", "error": f"{type(exc).__name__}: {exc}"[:300]})
+            {"stage": "graph_record", "error": public_error(exc)})
         return 0
 
 

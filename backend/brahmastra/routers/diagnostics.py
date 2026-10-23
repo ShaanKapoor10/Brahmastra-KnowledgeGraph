@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from brahmastra import db
+from brahmastra.errors import public_error
 
 router = APIRouter(prefix="/diagnostics", tags=["diagnostics"])
 
@@ -57,7 +58,7 @@ def _safe(fn, default=None):
     try:
         return fn()
     except Exception as exc:                                  # noqa: BLE001
-        return default if default is not None else {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        return default if default is not None else {"error": public_error(exc)}
 
 
 def _notes() -> dict[str, Any]:
