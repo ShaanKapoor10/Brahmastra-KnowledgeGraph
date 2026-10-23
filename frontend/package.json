@@ -30,7 +30,7 @@
     "@types/d3-force": "^3.0.10",
     "@types/d3-scale": "^4.0.9",
     "@types/d3-selection": "^3.0.12",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.2",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "^9.39.5",
