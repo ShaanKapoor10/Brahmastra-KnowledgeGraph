@@ -140,6 +140,8 @@ def test_distiller_declining_is_not_an_error(cp, tmp_path):
     assert result["stored"] == 0
     assert db.get_notes() == []
     assert cp.pending_count() == 0, "a declined capture must not be retried forever"
+    log = (cp.queue_dir() / "checkpoint.log").read_text(encoding="utf-8")
+    assert "skipped session s3" in log, "a skip deletes the captures, so it must be logged"
 
 
 def test_hook_never_fails_the_session(cp, tmp_path, capsys):

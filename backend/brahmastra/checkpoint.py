@@ -119,7 +119,7 @@ DISTIL_REMINDER = (
 
 def _log(message: str) -> None:
     """
-    Record why a checkpoint did not happen.
+    Record why a checkpoint did not happen, and what each drain did.
 
     A hook must never raise, which makes `except: pass` tempting and makes a
     broken checkpoint indistinguishable from a quiet one. This is the only
@@ -615,6 +615,10 @@ def drain() -> dict[str, Any]:
             continue
 
         if note is None:
+            # Logged because a skip deletes the captures: without this line a
+            # drain that stored nothing looks the same as one that never ran.
+            _log(f"skipped session {session[:8]}: {len(paths)} captures, "
+                 f"{len(conversation)} chars, nothing new worth a note")
             skipped += 1
             for path in paths:
                 path.unlink(missing_ok=True)
@@ -630,6 +634,8 @@ def drain() -> dict[str, Any]:
             mark_pending=True,
             source="checkpoint",
         )
+        _log(f"stored checkpoint-{paths[-1].stem} for session {session[:8]} "
+             f"({len(paths)} captures)")
         stored += 1
         for path in paths:
             path.unlink(missing_ok=True)
