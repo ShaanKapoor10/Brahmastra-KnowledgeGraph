@@ -303,6 +303,7 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 
 | Tool | What it does |
 |:--|:--|
+| `brahmastra_get_briefing` | Start on a project: the team's briefing and what was stored lately |
 | `brahmastra_search_notes` | Recall what was decided, fixed or learned about any topic |
 | `brahmastra_add_note` | Remember something, searchable immediately |
 | `brahmastra_search_entities` | Find a person, project or file and its connections |
@@ -311,10 +312,30 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 | `brahmastra_search_code` | Where something is implemented, by file and line |
 | `brahmastra_get_contradictions` | Where your knowledge disagrees, and which side is newer |
 | `brahmastra_get_graph_stats` | The shape of the graph: size, central entities, topics |
-| `brahmastra_run_pipeline` | Rebuild the graph, incrementally or in full |
+| `brahmastra_run_pipeline` | Rebuild the graph in the background, incrementally or in full |
 | `brahmastra_list_workspaces` | See every workspace |
 | `brahmastra_create_workspace` | Start a new, isolated graph |
 | `brahmastra_search_all_workspaces` | Search across workspaces, when you ask for it |
+
+</div>
+
+<br><br>
+
+<h2 align="center">Connect <em>your agent</em></h2>
+
+<div align="center">
+
+**Claude Code:** `/plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then `/plugin install brahmastra@brahmastra`
+
+**Codex:** `codex plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then install `brahmastra` from `/plugins`
+
+**Cursor and Gemini CLI:** [plugins/brahmastra-cursor](plugins/brahmastra-cursor/README.md) · [plugins/brahmastra-gemini](plugins/brahmastra-gemini/README.md)
+
+**Any agent that reads skills:** `npx skills add ShaanKapoor10/Brahmastra-KnowledgeGraph --skill brahmastra`
+
+Each install brings hooks: the notes matching every request reach the agent without it having to ask, and it is reminded to store the decisions it settles. Measured, that is what makes agents actually use the memory.
+Your project keeps its own CLAUDE.md or AGENTS.md; nothing about Brahmastra goes in it.
+Details: [plugins/brahmastra](plugins/brahmastra/README.md).
 
 </div>
 

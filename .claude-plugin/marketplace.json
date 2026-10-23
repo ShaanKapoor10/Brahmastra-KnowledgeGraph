@@ -1,0 +1,14 @@
+{
+  "name": "brahmastra",
+  "owner": {
+    "name": "Shaan Kapoor"
+  },
+  "description": "Brahmastra: shared, persistent team memory for AI agents.",
+  "plugins": [
+    {
+      "name": "brahmastra",
+      "source": "./plugins/brahmastra",
+      "description": "Recall and store team knowledge over MCP, with the briefing re-read after every compaction."
+    }
+  ]
+}

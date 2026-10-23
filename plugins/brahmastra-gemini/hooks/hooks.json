@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${extensionPath}/hooks/brahmastra-hook.mjs\" gemini",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${extensionPath}/hooks/brahmastra-hook.mjs\" gemini",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${extensionPath}/hooks/brahmastra-hook.mjs\" gemini",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -30,7 +30,7 @@ from brahmastra import logs as _logs
 _logs.configure()
 from brahmastra.db import init_db
 from brahmastra.routers import notes, pipeline, graph, ask, paths, workspaces, entities, diagnostics
-from brahmastra.routers import auth_routes
+from brahmastra.routers import auth_routes, hooks as hook_routes
 from brahmastra.ingest.routes import router as ingest_router
 
 
@@ -279,6 +279,28 @@ if _mcp_http_enabled():
         enable_dns_rebinding_protection=True, allowed_hosts=_hosts, allowed_origins=_origins)
     app.mount("/mcp", _mcp.streamable_http_app())
 
+    class _ServeMcpWithoutSlash:
+        """
+        Answer /mcp itself instead of redirecting it to /mcp/.
+
+        A mount answers its bare path with a 307 to the slashed one, and the
+        redirect is built from what THIS process saw. Behind Caddy that is
+        plain http and a path with /v1 already stripped, so a client posting to
+        the documented https://DOMAIN/v1/mcp was sent to http://DOMAIN/mcp/ --
+        wrong scheme, wrong path -- and failed (found 2026-10-22 against the
+        local install). Rewriting before routing means no redirect exists.
+        """
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http" and scope["path"] == "/mcp":
+                scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            await self.app(scope, receive, send)
+
+    app.add_middleware(_ServeMcpWithoutSlash)
+
 @app.exception_handler(LimitReached)
 async def _plan_limit_handler(request, exc: LimitReached):
     """A plan limit, raised from wherever the work entered (usage.charge)."""
@@ -316,6 +338,7 @@ app.include_router(paths.router)
 app.include_router(workspaces.router)
 app.include_router(entities.router)
 app.include_router(diagnostics.router)
+app.include_router(hook_routes.router)
 # Transcript ingestion. Mounted here rather than served separately so it
 # inherits the auth middleware and the per-request workspace binding: a
 # second door into the same data with its own idea of who may open it is

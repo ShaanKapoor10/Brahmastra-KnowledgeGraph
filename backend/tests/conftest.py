@@ -111,6 +111,9 @@ def _isolate_storage_choice(monkeypatch):
     # Empty is falsy everywhere these are read, and means "single store, sqlite".
     monkeypatch.setenv("GRAPH_BACKEND", "sqlite")
     monkeypatch.setenv("NOTE_BACKEND", "")
+    # brahmastra_add_note rebuilds the graph on a thread afterwards; a test
+    # that wants that turns it back on, so no other test leaves one running.
+    monkeypatch.setenv("GRAPH_AUTO_REFRESH", "0")
     monkeypatch.setenv("POSTGRES_DSN", "")
     monkeypatch.setenv("DATABASE_URL", "")
 
@@ -180,6 +183,10 @@ def _isolate_storage_choice(monkeypatch):
     # outliving a monkeypatch is how a stub becomes ineffective silently.
     from brahmastra import groq_pool
     groq_pool.reset()
+    # Likewise the remembered Ollama probe: a test that starts a fake server
+    # must not be answered from what an earlier test saw at the same address.
+    from brahmastra import llm
+    llm._ollama_probes.clear()
 
 
 @pytest.fixture(autouse=True)

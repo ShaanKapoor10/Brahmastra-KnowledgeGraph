@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:brahmastra:brahmastra",
+            "tool": "brahmastra_recall",
+            "input": {
+              "prompt": "${prompt}",
+              "event": "UserPromptSubmit",
+              "session": "${session_id}"
+            },
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:brahmastra:brahmastra",
+            "tool": "brahmastra_recall",
+            "input": {
+              "event": "Stop",
+              "prompt": "${last_assistant_message}",
+              "active": "${stop_hook_active}",
+              "session": "${session_id}"
+            },
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:brahmastra:brahmastra",
+            "tool": "brahmastra_recall",
+            "input": {
+              "event": "SessionStart"
+            },
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

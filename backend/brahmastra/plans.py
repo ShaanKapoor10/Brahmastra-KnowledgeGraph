@@ -110,7 +110,8 @@ def route_feature(method: str, path: str) -> str | None:
     Account, admin, pipeline and diagnostics routes are not plan features:
     roles already decide them, and they cost nothing a plan should meter.
     """
-    if path == "/mcp" or path.startswith("/mcp/"):
+    if path == "/mcp" or path.startswith("/mcp/") or path == "/hooks":
+        # Hooks are the same memory reaching the same agents (agent_hooks.py).
         return "mcp"
     if path == "/ask":
         return "ask"

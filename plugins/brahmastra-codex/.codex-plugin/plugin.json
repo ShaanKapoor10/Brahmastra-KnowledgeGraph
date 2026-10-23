@@ -1,0 +1,17 @@
+{
+  "name": "brahmastra",
+  "version": "0.3.0",
+  "description": "Shared, persistent team memory for your agent: recalls the notes that match each request, and reminds it to store decisions and root causes it settles.",
+  "author": {
+    "name": "Shaan Kapoor"
+  },
+  "homepage": "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph",
+  "repository": "https://github.com/ShaanKapoor10/Brahmastra-KnowledgeGraph",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "memory",
+    "knowledge-graph",
+    "mcp",
+    "team"
+  ]
+}

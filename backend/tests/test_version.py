@@ -80,3 +80,87 @@ def test_a_matching_server_is_current(monkeypatch, capsys):
                         lambda url: {"here": "abc", "there": "abc", "behind": False})
     assert version.main(["--against", "http://example"]) == 0
     assert "current" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The commit is read from .git, never by running git
+# ---------------------------------------------------------------------------
+#
+# Running `git` froze the stdio MCP server for 30 minutes at a time: the child
+# inherited the server's stdin pipe, blocked on it at startup on Windows, and
+# subprocess's timeout killed only the wrapper, then waited without limit for
+# the inner git's pipes. version.status() runs at the start of every pipeline
+# run, so every brahmastra_run_pipeline call could stall the whole server.
+
+def _checkout(tmp_path, head: str, refs: dict[str, str] | None = None,
+              packed: str | None = None):
+    git = tmp_path / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text(head + "\n")
+    for name, sha in (refs or {}).items():
+        (git / name).parent.mkdir(parents=True, exist_ok=True)
+        (git / name).write_text(sha + "\n")
+    if packed is not None:
+        (git / "packed-refs").write_text(packed)
+    pkg = tmp_path / "backend" / "brahmastra"
+    pkg.mkdir(parents=True)
+    return pkg
+
+
+def test_the_commit_comes_from_a_loose_branch_ref(tmp_path, monkeypatch):
+    pkg = _checkout(tmp_path, "ref: refs/heads/main",
+                    refs={"refs/heads/main": "4e8ee22aa1b2c3d4e5f6"})
+    monkeypatch.setattr(version, "PACKAGE", pkg)
+    monkeypatch.delenv("BRAHMASTRA_GIT_COMMIT", raising=False)
+    assert version._git_commit() == "4e8ee22"
+
+
+def test_the_commit_comes_from_packed_refs(tmp_path, monkeypatch):
+    pkg = _checkout(tmp_path, "ref: refs/heads/feat/x",
+                    packed="# pack-refs with: peeled\n"
+                           "1111111aaaa refs/heads/main\n"
+                           "2222222bbbb refs/heads/feat/x\n^3333333cccc\n")
+    monkeypatch.setattr(version, "PACKAGE", pkg)
+    monkeypatch.delenv("BRAHMASTRA_GIT_COMMIT", raising=False)
+    assert version._git_commit() == "2222222"
+
+
+def test_a_detached_head_is_its_own_commit(tmp_path, monkeypatch):
+    pkg = _checkout(tmp_path, "abcdef0123456789")
+    monkeypatch.setattr(version, "PACKAGE", pkg)
+    monkeypatch.delenv("BRAHMASTRA_GIT_COMMIT", raising=False)
+    assert version._git_commit() == "abcdef0"
+
+
+def test_a_worktree_follows_its_gitdir_file(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    _checkout(main, "ref: refs/heads/main", refs={"refs/heads/main": "9999999zzzz"})
+    wt_git = main / ".git" / "worktrees" / "wt"
+    wt_git.mkdir(parents=True)
+    (wt_git / "HEAD").write_text("ref: refs/heads/main\n")
+    (wt_git / "commondir").write_text("../..\n")
+    wt = tmp_path / "wt"
+    (wt / "backend" / "brahmastra").mkdir(parents=True)
+    (wt / ".git").write_text(f"gitdir: {wt_git}\n")
+    monkeypatch.setattr(version, "PACKAGE", wt / "backend" / "brahmastra")
+    monkeypatch.delenv("BRAHMASTRA_GIT_COMMIT", raising=False)
+    assert version._git_commit() == "9999999"
+
+
+def test_no_checkout_means_no_commit(tmp_path, monkeypatch):
+    monkeypatch.setattr(version, "PACKAGE", tmp_path)
+    monkeypatch.delenv("BRAHMASTRA_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(version, "_git_dir", lambda: (_ for _ in ()).throw(ValueError("none")))
+    assert version._git_commit() is None
+
+
+def test_status_never_starts_a_process(monkeypatch):
+    """The regression itself: nothing on this path may spawn `git` again."""
+    import subprocess
+
+    def refuse(*a, **k):
+        raise AssertionError("version.status() started a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    version.status()

@@ -1,0 +1,35 @@
+{
+  "_comment": "The Larkspur team's memory. An invented project, people and history: nothing here is real.",
+  "notes": [
+    {
+      "id": "briefing",
+      "title": "Larkspur workspace briefing",
+      "content": "## What this workspace covers\nLarkspur, the todo library, and the export format the Larkspur mobile app reads. One repository; its CLAUDE.md holds the code rules.\n\n## Who owns what\nCore library: Priya Raman. The export format and the mobile app: Tomas Weil.\n\n## How work is agreed here\n1. Anything that changes the export format needs Tomas Weil's sign-off first.\n2. Decisions are stored here with their reason, the day they are made.\n\n## Current focus (2026-10)\nPreparing larkspur 0.5: overdue tasks and reminders."
+    },
+    {
+      "id": "flaky-due-today",
+      "title": "Root cause of the flaky test_due_today (2026-09-12)",
+      "content": "The test tests/test_core.py::test_due_today fails between local midnight and the UTC date change (00:00 to 05:30 in India) because it builds the due time with naive datetime.now(), in local time, while larkspur.core.due_today compares dates against datetime.now(timezone.utc). The agreed fix, from Priya Raman: build test due times with datetime.now(timezone.utc). Do NOT change due_today to local time: the Larkspur mobile app sends due times in UTC, and due_today must stay in UTC."
+    },
+    {
+      "id": "keep-due-field",
+      "title": "Decision: the Task field stays named due (2026-09-20)",
+      "content": "Larkspur's export format, produced by larkspur.core.export, is read by the Larkspur mobile app 2.x, which parses the key due. Renaming Task.due (for example to due_at) changes the export and breaks every installed mobile app. Tomas Weil decided to keep the name due until mobile 3.0 ships in 2027. A rename needs his sign-off."
+    },
+    {
+      "id": "utc-strings",
+      "title": "Due times are ISO 8601 strings in UTC",
+      "content": "Larkspur stores due times as ISO 8601 strings with a UTC offset, for example 2026-10-23T09:00:00+00:00, because the mobile app and the export format both expect UTC. Compare them with datetime.fromisoformat against an aware datetime.now(timezone.utc), never against a naive datetime."
+    },
+    {
+      "id": "release-process",
+      "title": "Larkspur release process",
+      "content": "Releases are cut by Priya Raman on Thursdays: bump the version in pyproject.toml, tag vX.Y.Z, and publish to the internal package index."
+    },
+    {
+      "id": "logo",
+      "title": "Larkspur logo colours",
+      "content": "The Larkspur logo uses lavender #9B7FD4 on white. The mobile app uses the same lavender for overdue badges."
+    }
+  ]
+}

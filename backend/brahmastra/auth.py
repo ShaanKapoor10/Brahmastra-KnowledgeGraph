@@ -69,7 +69,7 @@ _ADMIN_PREFIXES = ("/auth/users", "/auth/audit", "/diagnostics/keys", "/auth/usa
                    "/auth/requests")
 _SELF_SERVICE_PREFIXES = ("/auth/me", "/auth/logout", "/auth/password", "/auth/tokens")
 # POSTs a viewer may make: they read and spend, but change nothing stored.
-_VIEWER_POSTS = frozenset({"/ask"})
+_VIEWER_POSTS = frozenset({"/ask", "/hooks"})
 
 
 def _configured_key() -> str:

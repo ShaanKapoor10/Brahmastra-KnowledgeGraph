@@ -1,16 +1,25 @@
 """
-MCP server — exposes the Brahmastra knowledge graph to Claude Code.
+MCP server — Brahmastra as memory for any agent that speaks MCP.
 
 Run:
-  cd backend && python -m brahmastra.mcp_server
+  cd backend && python -m brahmastra.mcp_server          (stdio, one user)
+  MCP_HTTP=1 on the API server                            (remote, /mcp, per user)
 
-Tools exposed:
-  brahmastra_run_pipeline        — run extract → resolve → build-graph
-  brahmastra_get_graph_stats     — db stats + graph summary
-  brahmastra_search_entities     — find entities by name / type
-  brahmastra_get_entity_details  — neighbourhood + relations for one entity
-  brahmastra_get_contradictions  — list detected contradictions
-  brahmastra_add_note            — upsert a note and mark it pending
+What an agent is given, in the order it meets them:
+  instructions   sent on connect; the loop and which tool to use (INSTRUCTIONS)
+  tools          14, each labelled read-only or not (tests/test_mcp_server.py)
+  prompts        recall, remember, onboard -- slash commands in Claude Code
+  resource       brahmastra://guide -- the long form of the instructions
+
+Brahmastra is a TOOL inside someone else's project. Four layers, each with one
+owner, and this file speaks only for the first:
+  1. the tool       how to use the memory -- here, identical in every project
+  2. the project    its CLAUDE.md / AGENTS.md -- its own, and it wins a conflict
+  3. the workspace  the `briefing` note -- a team's shared context that no repo
+                    file holds (scope, owners, agreements, current focus)
+  4. the person     their own client settings, never shared
+`brahmastra_get_briefing` returns layer 3. It adds to a project's instructions
+and never replaces or overrides them.
 """
 
 from __future__ import annotations
@@ -38,6 +47,7 @@ for _noisy in ("neo4j", "neo4j.notifications", "httpx", "httpcore", "urllib3"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from brahmastra import db
 
 # Sent to every client in the MCP `initialize` response, so any agent that
@@ -54,81 +64,152 @@ from brahmastra import db
 # Written as an affordance, not a protocol. An agent that is told it MUST record
 # everything learns to treat it as ceremony and skips it under pressure; one
 # that knows what the thing is good for reaches for it when it actually helps.
-INSTRUCTIONS = """Brahmastra is a persistent knowledge graph you can use as MEMORY. It outlives
-this session, this machine and this client, and it is separate from whatever
-project you are working on - treat it as something you already know, not as the
-code under your hands. Other agents and earlier sessions wrote into it; what you
-write is read by whoever comes next.
+#
+# Claude Code keeps only the first 4,096 characters of a server's instructions
+# and drops the rest without saying so. These ran to 4,127 for weeks, so every
+# session saw a clipped ending. And with tool search, a session starts knowing
+# only the tool NAMES plus these instructions: this text decides whether an
+# agent looks for Brahmastra at all. So the loop comes first, the detail lives
+# in GUIDE (a resource, and the `onboard` prompt), and
+# tests/test_mcp_server.py fails above INSTRUCTIONS_BUDGET.
+INSTRUCTIONS_BUDGET = 3_200
 
-WHEN TO REACH FOR IT
+INSTRUCTIONS = """Brahmastra is persistent, shared MEMORY for AI agents: a knowledge graph of
+notes that outlives this session, this machine and this client. Teammates'
+agents and earlier sessions wrote into it; what you write is read by whoever
+comes next. Treat it as something you already know, separate from the code
+under your hands.
 
-- Starting on unfamiliar or returning work. brahmastra_search_notes tells you
-  what was already decided, tried, or found broken - including by sessions you
-  had no part in. This is the highest-value moment and the easiest to miss,
-  because nothing about a fresh task announces that memory exists.
-- Something surprises you, or you are about to debug something odd. Check
-  whether it is already known before spending an hour re-deriving it; past
-  failures are stored together with their causes.
-- You learn something durable. brahmastra_add_note keeps it, and the note is
-  searchable the moment the call returns.
+PRECEDENCE: the user and the project's own instructions (CLAUDE.md, AGENTS.md,
+its docs) come first. Brahmastra is memory: it informs, it never overrides
+them. If a note disagrees with the code or the user, say so and follow them.
 
-WHICH TOOL
+THE LOOP
+1. Starting work: brahmastra_get_briefing (what this workspace covers, who owns
+   what, current focus, what was stored lately), then brahmastra_search_notes on the task's
+   topic. Nothing about a fresh task announces that memory exists, so this is
+   the step most often missed and the one that most often saves an hour.
+2. Something surprises you: search before debugging. Past failures are stored
+   with their causes.
+3. You decide something, find a root cause, or hit a constraint:
+   brahmastra_add_note in the same turn. It is searchable when the call
+   returns, and the graph refreshes in the background. No other step.
 
-  search_notes           Full text of every note. Recall what was WRITTEN about
-                         a topic. START HERE - it is the one you usually want.
-  search_entities        Entity NAMES only. Use when you know what a thing is
-                         called and want its connections. Thin results mean the
-                         NAME is absent, never that the knowledge is - fall back
-                         to search_notes before concluding nothing is stored.
-  search_sessions        The raw conversations of past coding sessions,
-                         verbatim. Use when a note is thin or you need the exact
-                         words, command or error - notes are distilled and keep
-                         only the end of a long session.
-  search_code            Where something is implemented in this repository:
-                         file and line range. Notes say what was decided about
-                         the code; this says where it is.
-  get_entity_details     One entity with its relations, aliases and centrality.
-                         For a code symbol it also says where it is defined.
-  get_graph_stats        What this memory contains. Good first orientation: the
-                         top entities summarise what it is actually about.
-  get_contradictions     Facts recorded once and contradicted later. Worth a
-                         look before trusting a single recalled fact about who
-                         reports to whom, what status something has, or where
-                         something lives.
-  add_note               Remember something.
-  run_pipeline           Rebuild the graph from all notes. Rarely needed, since
-                         adding a note already extracts it; use after a bulk
-                         import or an ontology change.
-  list_workspaces        Which graphs exist, and which one you are writing to.
-  create_workspace       A new, fully separate graph.
-  search_all_workspaces  Explicit cross-workspace search; each hit says which
-                         workspace it came from.
+WHICH SEARCH
+- search_notes: what was WRITTEN about a topic. The default.
+- search_entities, get_entity_details: a thing you know the NAME of, and its
+  connections. A thin result means the name is absent, not the knowledge;
+  fall back to search_notes.
+- search_sessions: past conversations verbatim, for an exact command or error.
+- search_code: where something is implemented (file and lines).
+- get_contradictions: before trusting one recalled fact about status,
+  ownership or location; the graph may hold the old answer and the new one.
+- search_all_workspaces: when you do not know which workspace holds it.
 
-WRITING A NOTE THAT IS WORTH RECALLING
-
-Notes are parsed into (subject, relation, object) triples, so plain
-entity-rich sentences extract well and pronouns do not. Write "The file llm.py
-raises LLMQuotaExhausted when the daily quota is spent", not "it throws when
-that runs out". Name files, functions, services and people explicitly.
-
-Record the WHY above all - the root cause, the option you rejected and what
-ruled it out, the constraint discovered the hard way. What changed is usually
-recoverable later from the code and the git history; why it changed is not, and
-that is the part nobody can reconstruct.
+WRITING A NOTE WORTH RECALLING
+Notes become (subject, relation, object) triples, so name things and avoid
+pronouns: "The file llm.py raises LLMQuotaExhausted when the daily quota is
+spent", not "it throws when that runs out". Record the WHY: the root cause,
+the option rejected and what ruled it out. What changed is recoverable from
+git; why it changed is not. Never store secrets.
 
 WORKSPACES
+Each workspace is a separate graph, usually one per project or team. You read
+and write the active one; list_workspaces says which.
 
-Each workspace is a completely separate graph - notes and entities in one are
-invisible to the others, and the same name may mean different things in each.
-You write to the active one; list_workspaces says which that is. Cross-workspace
-search is deliberately explicit, never implicit.
+More: the resource brahmastra://guide, or the prompts recall, remember and
+onboard."""
 
-COST
+# The long form. Served as a resource and through the `onboard` prompt, and
+# returned by brahmastra_get_briefing when a workspace has no briefing yet --
+# three routes because clients support prompts and resources unevenly, and a
+# tool result reaches every one of them.
+GUIDE = """# Using Brahmastra as memory
 
-Recall is one call and regularly saves an hour. Storing is one call and a few
-seconds. Neither needs a follow-up step."""
+Brahmastra keeps what a team and its agents learn: decisions and the reasons
+for them, root causes, constraints, who owns what. Notes are the source; a
+knowledge graph is built from them, so entities, relations and contradictions
+can be looked up as well as the text.
+
+## The loop
+1. Recall before planning: brahmastra_get_briefing, then brahmastra_search_notes
+   for the topic of the task.
+2. Store as you go: brahmastra_add_note when you decide something, find a root
+   cause, or discover a constraint. Do it in the same turn; batching to the end
+   of a session is how things go missing.
+3. Check before trusting: brahmastra_get_contradictions for facts about status,
+   ownership, reporting lines or location.
+
+## Tools
+| tool | use it to |
+|---|---|
+| get_briefing | start on a workspace: its purpose, briefing note, recent notes |
+| search_notes | recall what was written about a topic (hybrid: words and meaning) |
+| search_entities | find a named thing and its connections |
+| get_entity_details | one entity: relations, aliases, centrality, where code is defined |
+| search_sessions | the raw past conversations, verbatim |
+| search_code | where something is implemented in the indexed repository |
+| get_contradictions | facts recorded once and contradicted later |
+| get_graph_stats | how big the memory is and what it is mostly about |
+| add_note | remember something; extracted at once |
+| run_pipeline | rebuild the graph; rarely needed, see below |
+| list_workspaces | which graphs exist and which is active |
+| create_workspace | a new, fully separate graph (admins) |
+| search_all_workspaces | search every workspace you may open |
+| recall | for client hooks: recalled notes shaped as a hook result |
+
+## Writing notes
+- One topic per note, with a title a stranger would search for.
+- Name files, functions, services, people and teams explicitly. Pronouns do
+  not extract into the graph.
+- Lead with the why: root cause, rejected options and what ruled them out,
+  the constraint found the hard way.
+- Dates as YYYY-MM-DD. Never secrets, keys or passwords.
+
+## Where Brahmastra sits
+Brahmastra is a tool inside your project, not its rulebook. The user and the
+project's own files (CLAUDE.md, AGENTS.md, its docs) come first; memory
+informs and never overrides them. When a note disagrees with the code or the
+user, say so and follow the code and the user -- then store the correction.
+
+## The briefing note
+Each workspace can hold one note with the id `briefing`, written by the team
+that uses the workspace. brahmastra_get_briefing returns it first. It holds
+the shared context that lives in no repository file:
+- what the workspace covers (often several repositories, or none);
+- who owns what, and who to ask;
+- the team's working agreements;
+- the current focus, and what is deliberately out of scope;
+- which repository files hold the rules for the code (point to them; do not
+  copy them).
+It does NOT hold build commands, code conventions or repository traps: those
+belong in that repository's own CLAUDE.md or AGENTS.md, which already load.
+Write or replace it with
+brahmastra_add_note(note_id="briefing", title="<workspace> briefing", content=...).
+A project needs nothing about Brahmastra in its own files.
+
+## Rebuilding
+brahmastra_add_note extracts the note immediately and refreshes the graph in
+the background. brahmastra_run_pipeline is for after a bulk import or an
+ontology change; it starts a run and returns at once, and get_graph_stats
+reports when it has finished.
+"""
+
+BRIEFING_NOTE_ID = "briefing"
+RECENT_DAYS = 30
 
 mcp = FastMCP("brahmastra", instructions=INSTRUCTIONS)
+
+# What each tool does to the world, declared rather than left for a client to
+# guess from the name. A client can then run reads without asking and confirm
+# writes, which is what lets an agent recall freely.
+READS = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                        idempotentHint=True, openWorldHint=False)
+WRITES = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                         idempotentHint=False, openWorldHint=False)
+# A pipeline run can write insights back to the workspace's Notion pages.
+REBUILDS = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                           idempotentHint=True, openWorldHint=True)
 
 
 # ---------------------------------------------------------------------------
@@ -256,20 +337,29 @@ def _visible(workspace_id: str | None) -> bool:
 # Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(annotations=REBUILDS)
 @_scoped("member")
-def brahmastra_run_pipeline(mode: str = "incremental") -> str:
+def brahmastra_run_pipeline(mode: str = "incremental", wait: bool = False) -> str:
     """
-    Run the Brahmastra concept graph pipeline.
-    mode: 'incremental' (pending notes only) or 'full' (all notes).
+    Rebuild the graph: sync sources, extract pending notes, resolve entities,
+    build, summarise. Rarely needed -- brahmastra_add_note already extracts its
+    note and refreshes the graph. Use after a bulk import or an ontology change.
+
+    Starts the run and returns at once; brahmastra_get_graph_stats reports
+    `pipeline.running` and the last run's result. wait=True blocks until done
+    (about a minute; the server answers nothing else meanwhile).
+    mode: 'incremental' (pending notes only) or 'full' (re-extract everything).
     """
     db.init_db()
-    from brahmastra.pipeline import run_pipeline
-    result = run_pipeline(full=(mode == "full"))
-    return json.dumps(result, indent=2)
+    from brahmastra import pipeline
+
+    if wait:
+        return json.dumps(pipeline.run_pipeline(full=(mode == "full")), indent=2)
+    started = pipeline.run_in_background(full=(mode == "full"))
+    return json.dumps({**started, "check": "brahmastra_get_graph_stats -> pipeline"}, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_get_graph_stats() -> str:
     """
@@ -295,10 +385,26 @@ def brahmastra_get_graph_stats() -> str:
         }
     else:
         payload["graph"] = None
+    payload["pipeline"] = _pipeline_state()
     return json.dumps(payload, indent=2)
 
 
-@mcp.tool()
+def _pipeline_state() -> dict[str, Any]:
+    """Whether a rebuild is running, how the last one ended, and whether the
+    graph is behind the notes -- what a caller of a background run checks."""
+    from brahmastra import pipeline
+
+    state = pipeline.run_state()
+    last = state.get("last") or {}
+    return {
+        "running": state["running"],
+        "graph_behind_notes": state["stale"],
+        "last_run": {k: last.get(k) for k in ("status", "mode", "finished_at", "failed_stages")}
+                    if last else None,
+    }
+
+
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_search_entities(query: str = "", entity_type: str = "", limit: int = 10) -> str:
     """
@@ -329,7 +435,7 @@ def brahmastra_search_entities(query: str = "", entity_type: str = "", limit: in
     return json.dumps(results[:limit], indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_search_notes(query: str, limit: int = 10) -> str:
     """
@@ -362,7 +468,7 @@ def brahmastra_search_notes(query: str, limit: int = 10) -> str:
     return json.dumps(out, indent=2, ensure_ascii=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_search_sessions(query: str, limit: int = 8) -> str:
     """
@@ -389,7 +495,7 @@ def brahmastra_search_sessions(query: str, limit: int = 8) -> str:
     return json.dumps(hits, indent=2, ensure_ascii=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_search_code(query: str, scope: str = "source", limit: int = 6) -> str:
     """
@@ -413,7 +519,7 @@ def brahmastra_search_code(query: str, scope: str = "source", limit: int = 6) ->
     return json.dumps(hits, indent=2, ensure_ascii=False)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_get_entity_details(entity_name: str) -> str:
     """Return full details for a named entity: aliases, PageRank, cluster, and all relations."""
@@ -465,7 +571,7 @@ def brahmastra_get_entity_details(entity_name: str) -> str:
     return json.dumps(detail, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_get_contradictions() -> str:
     """
@@ -482,7 +588,7 @@ def brahmastra_get_contradictions() -> str:
     return json.dumps(cached["stats"].get("contradictions", []), indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 @_scoped("member")
 def brahmastra_add_note(
     title: str, content: str, note_id: str = "", publish: bool = False
@@ -518,8 +624,11 @@ def brahmastra_add_note(
     except usage.LimitReached as e:
         return _denied(str(e))
     nid = note_id or str(uuid.uuid4())[:8]
-    db.upsert_note(nid, title, content, mark_pending=True,
-                   publish=publish or None, source="mcp")
+    # Stamped, so "what was stored lately" (brahmastra_get_briefing) has an
+    # answer; notes stored here used to carry no time at all.
+    from datetime import datetime, timezone
+    db.upsert_note(nid, title, content, last_edited=datetime.now(timezone.utc).isoformat(),
+                   mark_pending=True, publish=publish or None, source="mcp")
 
     # Extract immediately, and treat failure as a delay rather than an error.
     # A rate limit or a dead provider leaves the note `pending`, which is
@@ -528,7 +637,7 @@ def brahmastra_add_note(
     extracted: dict[str, Any] = {"extraction": "pending"}
     try:
         from brahmastra.extraction import extract_note
-        result = extract_note(db.get_note(nid))
+        result = extract_note(db.get_note(nid) or {})
         if result.get("error"):
             extracted = {"extraction": "pending", "reason": str(result["error"])[:200]}
         else:
@@ -537,14 +646,31 @@ def brahmastra_add_note(
         extracted = {"extraction": "pending", "reason": f"{type(e).__name__}: {e}"[:200]}
 
     return json.dumps({"status": "added", "note_id": nid, "title": title,
-                       "publish": bool(publish), **extracted}, indent=2)
+                       "publish": bool(publish), **extracted,
+                       "graph": _refresh_graph_soon()}, indent=2)
+
+
+def _refresh_graph_soon() -> str:
+    """Bring the graph up to date with the note just stored, without the agent
+    having to remember a second call. The note's facts are stored already; the
+    entities, merges and topics built from them are not, until a rebuild. A
+    graph-only rebuild (no sync, no model calls) on a thread, after a short
+    pause so a burst of notes shares one. GRAPH_AUTO_REFRESH=0 turns it off."""
+    if os.environ.get("GRAPH_AUTO_REFRESH", "1").strip() == "0":
+        return "not refreshed (GRAPH_AUTO_REFRESH=0); run brahmastra_run_pipeline"
+    from brahmastra import pipeline
+
+    started = pipeline.run_in_background(
+        graph_only=True, delay_s=float(os.environ.get("GRAPH_REFRESH_DELAY_S", "15")))
+    return ("refreshing in the background" if started["started"]
+            else "a rebuild already scheduled or running will include it")
 
 
 # ---------------------------------------------------------------------------
 # Workspaces — several independent graphs
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_list_workspaces() -> str:
     """
@@ -561,7 +687,7 @@ def brahmastra_list_workspaces() -> str:
     }, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 @_scoped("admin")
 def brahmastra_create_workspace(
     name: str,
@@ -606,7 +732,7 @@ def brahmastra_create_workspace(
     }, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READS)
 @_scoped("viewer")
 def brahmastra_search_all_workspaces(query: str, limit: int = 10) -> str:
     """
@@ -639,6 +765,142 @@ def brahmastra_search_all_workspaces(query: str, limit: int = 10) -> str:
             for h in hits
         ],
     }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Starting on a project
+# ---------------------------------------------------------------------------
+
+@mcp.tool(annotations=READS)
+@_scoped("viewer")
+def brahmastra_get_briefing() -> str:
+    """
+    START HERE on a project: the workspace's briefing note (what it covers,
+    who owns what, team agreements, current focus), the notes stored in the
+    last 30 days, and how much the memory holds. When the workspace has no
+    briefing yet, says how to write one.
+
+    The briefing adds the team's shared context to the project's own
+    CLAUDE.md / AGENTS.md; those, and the user, take precedence over it.
+    """
+    db.init_db()
+    workspace_id = db.workspace()
+    workspace = db.get_workspace(workspace_id) or {}
+    briefing = db.get_note(BRIEFING_NOTE_ID)
+    notes = [n for n in db.get_notes() if n.get("id") != BRIEFING_NOTE_ID]
+    # Recent means recent. Notes stored over MCP before 2026-10-22 carry no
+    # time, so without a cutoff the "latest" were months-old Notion pages.
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)).isoformat()
+    dated = sorted((n for n in notes if (n.get("last_edited") or "") >= since),
+                   key=lambda n: n["last_edited"], reverse=True)
+    cached = db.get_cached_graph()
+    payload: dict[str, Any] = {
+        "workspace": {"id": workspace_id, "name": workspace.get("name"),
+                      "description": workspace.get("description")},
+        "briefing": ({"title": briefing.get("title"), "content": briefing.get("content")}
+                     if briefing else None),
+        "recent_notes": [{"id": n["id"], "title": n.get("title"), "edited": n["last_edited"]}
+                         for n in dated[:8]],
+        "memory": {
+            "notes": len(notes) + (1 if briefing else 0),
+            "top_entities": [e.get("entity") if isinstance(e, dict) else e
+                             for e in (cached or {}).get("stats", {}).get("central_entities", [])[:8]],
+            "graph_built_at": (cached or {}).get("built_at"),
+        },
+        "pipeline": _pipeline_state(),
+    }
+    if not briefing:
+        payload["write_a_briefing"] = (
+            f"This workspace has no briefing. If the user wants one, ask what the "
+            f"workspace covers, who owns what, the team's agreements and current focus "
+            f"(not build commands or code rules: those belong in the repository's own "
+            f"CLAUDE.md or AGENTS.md), then store it with brahmastra_add_note("
+            f"note_id='{BRIEFING_NOTE_ID}', title='<workspace> briefing', content=...).")
+        payload["guide"] = GUIDE
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+@mcp.tool(annotations=READS)
+@_scoped("viewer")
+def brahmastra_recall(prompt: str = "", event: str = "UserPromptSubmit", active: str = "",
+                      session: str = "") -> str:
+    """
+    For client hooks, not for agents: recalled memory shaped as a Claude Code
+    hook result. Agents use brahmastra_search_notes and brahmastra_get_briefing.
+
+    event=UserPromptSubmit: the notes matching `prompt`, plus the workspace
+    briefing on a session's first request.
+    event=SessionStart: the workspace briefing, after a compaction.
+    event=Stop: `prompt` is the agent's last message; a one-line reminder to
+    store what it settled, once per turn (`active` is stop_hook_active).
+    `session` lets the Stop check also read the request that started the turn.
+    """
+    # Why a separate tool: Claude Code hands an MCP hook's result to the
+    # model only when it is JSON with hookSpecificOutput.additionalContext.
+    # Plain text -- what every other tool returns -- reaches it as the bare
+    # word "completed". Measured 2026-10-23: the plugin's recall hook ran,
+    # fetched the right notes, and the agent never saw them. The rules live in
+    # agent_hooks, shared with the HTTP hook route other clients use.
+    from brahmastra import agent_hooks
+
+    payload: dict[str, Any] = {"hook_event_name": event, "session_id": session,
+                               "stop_hook_active": active}
+    payload["last_assistant_message" if event == "Stop" else "prompt"] = prompt
+    if event == "SessionStart":
+        payload["source"] = "compact"
+    out = agent_hooks.handle("claude", payload)
+    return json.dumps(out, ensure_ascii=False) if out else ""
+
+
+# Prompts appear as slash commands (/brahmastra:recall in Claude Code) and the
+# resource can be @-mentioned. Static text, so nothing here needs scoping: the
+# tools they lead to are scoped when called.
+
+@mcp.prompt(name="recall", title="Recall before starting",
+            description="Load what Brahmastra already knows about a task before planning it.")
+def recall_prompt(topic: str) -> str:
+    return (
+        f"Before planning anything, recall what is already known about: {topic}\n\n"
+        "1. Call brahmastra_get_briefing for the workspace's purpose and rules.\n"
+        "2. Call brahmastra_search_notes with the topic, then once or twice more "
+        "with different wording.\n"
+        "3. For anything you know the name of, call brahmastra_get_entity_details.\n"
+        "4. If a recalled fact is about status, ownership or location, check "
+        "brahmastra_get_contradictions.\n\n"
+        "Then summarise what was decided, what was tried and failed, and what is "
+        "open, citing note ids. If nothing is stored, say so plainly.")
+
+
+@mcp.prompt(name="remember", title="Remember this",
+            description="Store decisions, root causes and constraints from this session in Brahmastra.")
+def remember_prompt(what: str = "") -> str:
+    target = (f"Store this in Brahmastra: {what}" if what.strip() else
+              "Review this conversation for decisions, root causes, rejected options and "
+              "constraints that are not stored in Brahmastra yet, and store each one.")
+    return (
+        f"{target}\n\n"
+        "Use brahmastra_add_note, one note per topic:\n"
+        "- a title a stranger would search for;\n"
+        "- plain sentences naming files, functions, services and people (no pronouns);\n"
+        "- the WHY first: root cause, options rejected and what ruled them out;\n"
+        "- dates as YYYY-MM-DD; never secrets, keys or passwords.\n"
+        "Search first (brahmastra_search_notes) so you update an existing note "
+        "(same note_id) instead of duplicating it.")
+
+
+@mcp.prompt(name="onboard", title="Onboard to this project",
+            description="Learn how to use Brahmastra, then read this workspace's briefing.")
+def onboard_prompt() -> str:
+    return (GUIDE + "\n\nNow call brahmastra_get_briefing and summarise for the user "
+            "what this project is, its rules, and what was worked on most recently.")
+
+
+@mcp.resource("brahmastra://guide", name="guide", title="Using Brahmastra as memory",
+              description="How to recall, store and search; the long form of the server instructions.",
+              mime_type="text/markdown")
+def guide_resource() -> str:
+    return GUIDE
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +981,20 @@ def _warm_native_imports() -> list[str]:
             warmed.append("evidence-reranker")
     except Exception as exc:                           # noqa: BLE001
         print(f"warm evidence reranker failed: {exc}", file=sys.stderr)
+
+    # The pipeline's stages, because pipeline runs now happen on a background
+    # thread (pipeline.run_in_background): every module a stage imports lazily
+    # would otherwise be imported on that thread, which is the deadlock above.
+    for module in ("networkx", "community", "jellyfish", "notion_client",
+                   "brahmastra.pipeline", "brahmastra.extraction",
+                   "brahmastra.entity_resolution", "brahmastra.concept_graph",
+                   "brahmastra.cluster_summary", "brahmastra.sync",
+                   "brahmastra.notion_writeback", "brahmastra.graph_snapshot"):
+        try:
+            __import__(module)
+            warmed.append(module.removeprefix("brahmastra."))
+        except Exception as exc:                       # noqa: BLE001
+            print(f"warm {module} failed: {exc}", file=sys.stderr)
     return warmed
 
 

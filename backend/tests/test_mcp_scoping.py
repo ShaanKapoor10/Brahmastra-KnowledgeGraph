@@ -179,3 +179,21 @@ def test_remote_mcp_accepts_this_installs_own_host_and_nothing_else():
     assert {"mcp.internal", "other.host"} <= set(hosts)
     _, origins = allowed_hosts_and_origins({"CORS_ORIGINS": "*"})
     assert origins == []                   # "*" is never an allowed origin
+
+
+def test_the_documented_url_without_a_slash_is_served_not_redirected(mcp_app):
+    """Clients are told https://DOMAIN/v1/mcp. A 307 to /mcp/ is built from what
+    the backend saw behind Caddy -- plain http, /v1 stripped -- so following it
+    lands on a URL that does not exist (found 2026-10-22). Every other test
+    here posts to /mcp/, which is why nothing caught it."""
+    app, store, _ = mcp_app
+    admin = store.create_user("admin@example.com", PW, role="admin")
+    token = store.create_token(admin["id"], "test")["token"]
+    body = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}}}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"}
+    with TestClient(app, raise_server_exceptions=False) as client:
+        r = client.post("/mcp", headers=headers, json=body, follow_redirects=False)
+    assert r.status_code == 200, (r.status_code, r.headers.get("location"))
+    assert "brahmastra" in r.text

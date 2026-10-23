@@ -39,7 +39,7 @@ Brahmastra has three layers:
    entities, topic clusters with summaries, contradictions and statements. The pipeline
    can rebuild all of it from the notes.
 3. **Interfaces** read and write the graph:
-   - the MCP server, with 12 tools for assistants;
+   - the MCP server, with 14 tools, 3 prompts and a guide for assistants;
    - the REST API, with 40 routes;
    - the web dashboard.
 

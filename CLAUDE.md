@@ -9,8 +9,8 @@ only makes the tools available; using them is on you, every time.
 ### The loop you MUST follow
 
 1. **RECALL at the start of any task.**
-   Before planning or coding, call `brahmastra_get_graph_stats` and
-   `brahmastra_search_entities` to load what's already known about the project.
+   Before planning or coding, call `brahmastra_get_briefing` (the workspace's purpose,
+   its briefing note, what was stored lately) and `brahmastra_search_notes` on the task.
    IMPORTANT: `brahmastra_search_entities` only matches entity NAMES in the graph.
    To recall what was *written* about a topic (decisions, bug fixes, changes), use
    `brahmastra_search_notes` — it searches the full text of every note and surfaces
@@ -23,19 +23,53 @@ only makes the tools available; using them is on you, every time.
    Write notes as entity-rich subject–relation–object prose (e.g. "Brahmastra uses Ollama.
    The file extraction.py implements retry logic."). That extracts into a good graph.
 
-3. **REBUILD after adding notes — EXPLICITLY, in the same turn.**
-   Call `brahmastra_run_pipeline` (use `incremental`; use `full` only to re-extract
-   everything). Do NOT rely on the live watcher to do this — it can stop silently. An
-   `add_note` without a rebuild leaves the note `pending` with 0 triples, so it is
-   INVISIBLE to `search_entities` and other sessions cannot recall it. Verify the note
-   reached `extraction_status='done'` before considering it stored.
+3. **CHECK the note was stored — no separate rebuild step any more.**
+   `brahmastra_add_note` extracts the note in the call and then rebuilds the graph on a
+   background thread (graph only, ~45s, `GRAPH_AUTO_REFRESH=0` turns it off). Its reply
+   says `"extraction": "done"`; if it says `pending` (a model failure), call
+   `brahmastra_run_pipeline` to retry. That tool now **returns at once** and runs in the
+   background; `brahmastra_get_graph_stats` → `pipeline` says when it finished.
 
-### Available MCP tools (12)
+### ⚠️ Why run_pipeline used to hang for 30 minutes (fixed 2026-10-22)
+Not the pipeline: `version.status()` ran `git rev-parse` before every run. A stdio MCP
+server's stdin is the client's pipe; the child inherited it and, on Windows, Git's
+runtime blocked at startup. `timeout=5` killed only the `git.exe` wrapper, then waited
+forever on pipes the inner git held. FastMCP runs a sync tool on the event loop, so the
+whole server froze until Claude Code gave up at 1800s. Found with
+`uvx py-spy dump --pid <server>` (main thread in `subprocess.communicate` under
+`_git_commit`; a `git rev-parse` alive since the previous day). The commit is now read
+from `.git` files, never by a process. **Any subprocess reachable from the MCP server
+must pass `stdin=subprocess.DEVNULL`.** Find the right server PID by its parent: each
+Claude session starts its own, and a stale one from yesterday may be the one you're on.
+
+### Agents do not use memory unless something puts it in front of them (measured)
+`evals/agent/run.py` runs real Claude Code sessions on an invented project against a
+throwaway Brahmastra. With the server alone, or the skill, agents recalled by their own
+choice in 1 of 24 sessions and went ahead with a change the stored decision forbade;
+the plugin's hooks (`UserPromptSubmit` recall, `Stop` store check, both through
+`brahmastra_recall`) took that to 2/2 and stored exactly the decision that needed
+storing, on Haiku and Sonnet. Read `evals/agent/README.md` before changing the hooks,
+the instructions or the skill, and rerun it after. An MCP hook's result reaches the model
+ONLY as JSON `hookSpecificOutput.additionalContext`; plain text arrives as "completed".
+
+**The hook rules live in ONE place: `brahmastra/agent_hooks.py`**, for Claude Code, Codex,
+Cursor and Gemini CLI. `brahmastra_recall` (Claude Code's MCP-tool hooks) and
+`POST /hooks?client=` (everyone else, through the Node script
+`plugins/brahmastra-{codex,cursor,gemini}/hooks/brahmastra-hook.mjs`, identical copies)
+both call `agent_hooks.handle`. Each client has a different contract, pinned in
+`tests/test_agent_hooks.py`; a wrong shape is dropped SILENTLY by the client:
+Codex `Stop` continues via `{"decision":"block","reason"}`; Cursor cannot add context to a
+request, only at `sessionStart`, and its `stop` sends `followup_message`; Gemini's
+`AfterAgent` can only reject the answer, so its reminder is carried to the next request.
+The briefing comes with a session's FIRST request, because Claude Code skips MCP-tool
+hooks at launch.
+
+### Available MCP tools (14)
 
 Use the PRODUCTION Brahmastra MCP (`brahmastra_*` from the Brahmastra plugin) for memory.
 A `brahmastra-test` server exists for the Haiku experiment and is not plugged in; never
 store memory there.
-Core: `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
+Core: `brahmastra_get_briefing`, `brahmastra_recall` (for hooks), `brahmastra_add_note`, `brahmastra_search_entities`, `brahmastra_search_notes`,
 `brahmastra_search_sessions`, `brahmastra_search_code`,
 `brahmastra_get_entity_details`, `brahmastra_get_graph_stats`,
 `brahmastra_get_contradictions`, `brahmastra_run_pipeline`.
@@ -803,7 +837,7 @@ leak made 18 tests take 29 seconds; stubbing it took them to 0.10s.
   transcript, with the passages it read.
 - **Notes:** hybrid search, newest first, long notes folded.
 
-## API routes (40)
+## API routes (41)
 
 ```
 /health  /health/ready
@@ -813,6 +847,7 @@ leak made 18 tests take 29 seconds; stubbing it took them to 0.10s.
 /pipeline/run  /pipeline/status  /pipeline/sync  /pipeline/extract
 /pipeline/resolve  /pipeline/build-graph  /pipeline/cluster-summaries
 /ask
+/hooks                                      POST ?client=codex|cursor|gemini|claude
 /paths
 /workspaces  /workspaces/{workspace_id}  /workspaces/search
 /ingest/modes  /ingest/stats  /ingest/passages

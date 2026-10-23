@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -68,17 +67,64 @@ LOADED = fingerprint_of_disk()
 
 
 def _git_commit() -> str | None:
-    """The checkout's commit, when there is a checkout. A container has none."""
+    """The checkout's commit, when there is a checkout. A container has none.
+
+    Read from the files in .git, NOT by running `git`. Running it is what froze
+    the MCP server for 30 minutes at a time (2026-10-22). The stdio server's
+    stdin is the pipe its client talks through; a child started without its own
+    stdin inherits that pipe, and on Windows Git's runtime blocks at startup
+    probing a pipe another thread is reading. `timeout=5` did not save it: on
+    expiry it kills the `git.exe` wrapper, then waits with NO limit for output
+    pipes the inner git still holds. Every pipeline run calls this first, and
+    the tool runs on the server's event loop, so the whole server stopped until
+    the client gave up -- with the pipeline itself never started. Found with
+    py-spy: the main thread in subprocess.communicate under _git_commit, and a
+    `git rev-parse` alive since the day before.
+    """
     configured = (os.environ.get("BRAHMASTRA_GIT_COMMIT") or "").strip()
     if configured:
         return configured
     try:
-        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                             cwd=PACKAGE, capture_output=True, text=True,
-                             timeout=5)
-        return out.stdout.strip() or None if out.returncode == 0 else None
-    except Exception:
+        return _read_head(_git_dir())
+    except (OSError, ValueError):
         return None
+
+
+def _git_dir() -> Path:
+    """The .git directory of the checkout holding this package."""
+    for folder in (PACKAGE, *PACKAGE.parents):
+        marker = folder / ".git"
+        if marker.is_dir():
+            return marker
+        if marker.is_file():          # a worktree: "gitdir: <path>"
+            target = marker.read_text(encoding="utf-8").strip()
+            if target.startswith("gitdir:"):
+                path = Path(target[len("gitdir:"):].strip())
+                return path if path.is_absolute() else (folder / path).resolve()
+    raise ValueError("not inside a git checkout")
+
+
+def _read_head(git_dir: Path) -> str | None:
+    """HEAD's commit, short, from a loose ref or packed-refs."""
+    head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    if not head.startswith("ref:"):
+        return head[:7] or None               # detached
+    ref = head[len("ref:"):].strip()
+    # A worktree keeps its own HEAD but shares refs with the main checkout.
+    common = git_dir
+    if (git_dir / "commondir").is_file():
+        common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    for base in dict.fromkeys((git_dir, common)):
+        loose = base / ref
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()[:7] or None
+    packed = common / "packed-refs"
+    if packed.is_file():
+        for line in packed.read_text(encoding="utf-8").splitlines():
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref and not line.startswith(("#", "^")):
+                return sha[:7]
+    return None                               # a branch with no commits yet
 
 
 def status() -> dict[str, Any]:

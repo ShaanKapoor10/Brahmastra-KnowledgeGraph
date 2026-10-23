@@ -10,15 +10,19 @@ import { BadgeCheck, Check, Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from "
 import { authApi, when, type ApiToken } from "@/lib/auth-api"
 import type { PlanCatalog, UsageRow } from "@/lib/plans"
 import { MyRequests } from "@/components/panels/plan-requests"
+import { ConnectAgent } from "@/components/panels/connect-agent"
 import type { SignedInUser } from "@/components/dashboard"
 
 export function AccountPanel({ user }: { user: SignedInUser }) {
   if (user.kind !== "session") {
     return (
-      <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-        You are signed in with {user.kind === "anonymous" ? "development mode" : "the service key"}, which has no
-        account to manage. Sign in as a person to change a password or create API tokens.
-      </p>
+      <div className="flex flex-col gap-4">
+        <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+          You are signed in with {user.kind === "anonymous" ? "development mode" : "the service key"}, which has no
+          account to manage. Sign in as a person to change a password or create API tokens.
+        </p>
+        <ConnectAgent />
+      </div>
     )
   }
   return (
@@ -32,6 +36,7 @@ export function AccountPanel({ user }: { user: SignedInUser }) {
       <YourPlan planId={user.plan ?? null} />
       <MyRequests planId={user.plan ?? null} />
       <Tokens />
+      <ConnectAgent />
       <ChangePassword />
     </div>
   )
