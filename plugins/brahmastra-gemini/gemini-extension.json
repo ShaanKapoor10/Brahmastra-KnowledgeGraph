@@ -1,0 +1,23 @@
+{
+  "name": "brahmastra",
+  "version": "0.3.0",
+  "description": "Shared, persistent team memory for your agent: recalls the notes that match each request, and reminds it to store decisions and root causes it settles.",
+  "settings": [
+    {
+      "name": "Brahmastra URL",
+      "envVar": "BRAHMASTRA_URL",
+      "description": "Your install's API address, without /mcp: https://brahmastra.example.com/v1, or http://localhost:8001."
+    },
+    {
+      "name": "API token",
+      "envVar": "BRAHMASTRA_TOKEN",
+      "sensitive": true,
+      "description": "A personal API token from the dashboard, Account > API tokens."
+    },
+    {
+      "name": "Workspace",
+      "envVar": "BRAHMASTRA_WORKSPACE",
+      "description": "The workspace (graph) to read, usually one per project or team."
+    }
+  ]
+}

@@ -327,8 +327,13 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 
 **Claude Code:** `/plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then `/plugin install brahmastra@brahmastra`
 
-**Codex, Cursor, Gemini CLI and others:** `npx skills add ShaanKapoor10/Brahmastra-KnowledgeGraph --skill brahmastra`
+**Codex:** `codex plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then install `brahmastra` from `/plugins`
 
+**Cursor and Gemini CLI:** [plugins/brahmastra-cursor](plugins/brahmastra-cursor/README.md) · [plugins/brahmastra-gemini](plugins/brahmastra-gemini/README.md)
+
+**Any agent that reads skills:** `npx skills add ShaanKapoor10/Brahmastra-KnowledgeGraph --skill brahmastra`
+
+Each install brings hooks: the notes matching every request reach the agent without it having to ask, and it is reminded to store the decisions it settles. Measured, that is what makes agents actually use the memory.
 Your project keeps its own CLAUDE.md or AGENTS.md; nothing about Brahmastra goes in it.
 Details: [plugins/brahmastra](plugins/brahmastra/README.md).
 

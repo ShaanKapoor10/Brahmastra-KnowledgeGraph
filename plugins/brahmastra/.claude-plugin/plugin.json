@@ -1,7 +1,7 @@
 {
   "name": "brahmastra",
   "displayName": "Brahmastra",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared, persistent team memory for your agents: recall what was decided, tried and broken; store decisions and root causes as you work. Connects to your Brahmastra install over MCP.",
   "author": {
     "name": "Shaan Kapoor"

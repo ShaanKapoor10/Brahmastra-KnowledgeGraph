@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Check, Copy, Plug } from "lucide-react"
 import { authApi } from "@/lib/auth-api"
 import { Section } from "@/components/panels/account-panel"
-import { CLIENTS, TOKEN_VAR, type ConnectInfo } from "@/lib/connect"
+import { AGENT_CONFIG, CLIENTS, TOKEN_VAR, agentConfig, type ConnectInfo } from "@/lib/connect"
 
 export function ConnectAgent() {
   const [info, setInfo] = useState<ConnectInfo | null>(null)
@@ -61,7 +61,8 @@ export function ConnectAgent() {
             )}
             <li>Pick your agent and copy its setup.</li>
             <li>
-              Restart the agent and ask it to call <code className="font-mono text-xs">brahmastra_get_briefing</code>.
+              Restart the agent. With the hooks, its first request brings the workspace briefing; without them, ask it
+              to call <code className="font-mono text-xs">brahmastra_get_briefing</code>.
             </li>
           </ol>
 
@@ -93,6 +94,21 @@ export function ConnectAgent() {
           {/* Keyed by its text: another agent or workspace is a new box, so "Copied" never lingers. */}
           <Snippet key={snippet} where={client.where} text={snippet} />
           {client.note && <p className="text-xs text-muted-foreground">{client.note}</p>}
+
+          {client.hooks && info && (
+            <>
+              <p className="pt-2 text-sm text-foreground">
+                Then install the hooks, so the agent uses the memory without being asked.
+              </p>
+              <Snippet key={`h${snippet}`} where={client.hooks.where} text={client.hooks.snippet({ ...info, ws })} />
+              {client.hooks.note && <p className="text-xs text-muted-foreground">{client.hooks.note}</p>}
+              <p className="pt-2 text-xs text-muted-foreground">
+                If the agent does not see your shell&apos;s variables (an editor opened from a desktop icon), the
+                hooks read this file instead. Keep it private to your user account.
+              </p>
+              <Snippet key={`c${snippet}`} where={AGENT_CONFIG} text={agentConfig({ ...info, ws })} />
+            </>
+          )}
         </>
       )}
     </Section>

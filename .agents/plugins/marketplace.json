@@ -1,0 +1,20 @@
+{
+  "name": "brahmastra",
+  "interface": {
+    "displayName": "Brahmastra"
+  },
+  "plugins": [
+    {
+      "name": "brahmastra",
+      "source": {
+        "source": "local",
+        "path": "./plugins/brahmastra-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

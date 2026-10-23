@@ -24,4 +24,6 @@ Help the user connect. Ask for three things: the install's URL (for example `htt
 - **Cursor** (`.cursor/mcp.json` or `~/.cursor/mcp.json`): `"brahmastra": { "url": "<URL>/mcp", "headers": { "Authorization": "Bearer ${env:BRAHMASTRA_TOKEN}", "X-Brahmastra-Workspace": "<WORKSPACE>" } }` under `mcpServers`.
 - **Gemini CLI** (`settings.json`): `"brahmastra": { "httpUrl": "<URL>/mcp", "headers": { ... } }` under `mcpServers`, with the same two headers.
 
+Then install the hooks for that client, which put the matching notes in front of the agent on every request and remind it to store what it settles (Claude Code's plugin includes them). Codex: `codex plugin marketplace add ShaanKapoor10/Brahmastra-KnowledgeGraph`, then install `brahmastra` from `/plugins`. Cursor and Gemini CLI: the packages `plugins/brahmastra-cursor` and `plugins/brahmastra-gemini` in that repository, each with a README. The hooks need Node, and read `BRAHMASTRA_URL`, `BRAHMASTRA_TOKEN` and `BRAHMASTRA_WORKSPACE` or `~/.brahmastra/agent.json`.
+
 Client configuration formats change; if one of these is rejected, check that client's MCP documentation for its current form. After connecting, restart the session so the tools load, then call `brahmastra_get_briefing`.

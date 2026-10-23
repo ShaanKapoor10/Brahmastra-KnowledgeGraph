@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/hooks/brahmastra-hook.mjs\" codex",
+            "commandWindows": "node \"%PLUGIN_ROOT%/hooks/brahmastra-hook.mjs\" codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/hooks/brahmastra-hook.mjs\" codex",
+            "commandWindows": "node \"%PLUGIN_ROOT%/hooks/brahmastra-hook.mjs\" codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/hooks/brahmastra-hook.mjs\" codex",
+            "commandWindows": "node \"%PLUGIN_ROOT%/hooks/brahmastra-hook.mjs\" codex",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

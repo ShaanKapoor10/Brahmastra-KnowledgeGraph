@@ -30,7 +30,7 @@ from brahmastra import logs as _logs
 _logs.configure()
 from brahmastra.db import init_db
 from brahmastra.routers import notes, pipeline, graph, ask, paths, workspaces, entities, diagnostics
-from brahmastra.routers import auth_routes
+from brahmastra.routers import auth_routes, hooks as hook_routes
 from brahmastra.ingest.routes import router as ingest_router
 
 
@@ -338,6 +338,7 @@ app.include_router(paths.router)
 app.include_router(workspaces.router)
 app.include_router(entities.router)
 app.include_router(diagnostics.router)
+app.include_router(hook_routes.router)
 # Transcript ingestion. Mounted here rather than served separately so it
 # inherits the auth middleware and the per-request workspace binding: a
 # second door into the same data with its own idea of who may open it is

@@ -23,11 +23,15 @@ The plugin adds:
 |---|---|
 | MCP server | The `brahmastra_*` tools, the `recall`, `remember` and `onboard` prompts, and the `brahmastra://guide` resource |
 | Skill `brahmastra:brahmastra` | When to use the memory, and how to connect when the tools are missing |
-| Hooks | On every request, the notes matching it are put in front of the model; when the agent stops, it is reminded to store a decision, root cause or declined request it settled; after a compaction, the briefing comes back |
+| Hooks | On every request, the notes matching it are put in front of the model, with the workspace briefing on a session's first request; when the agent stops, it is reminded to store a decision, root cause or declined request it settled; after a compaction, the briefing comes back |
 
 The hooks are what make the memory get used. Measured in `evals/agent`: with the server alone, agents almost never looked, and went ahead with a change the team had decided against. With the hooks, they declined it and stored the new decisions, and only those.
 
-## Codex, Cursor, Gemini CLI and other agents
+## Codex, Cursor and Gemini CLI
+
+Each has its own package with the same hooks, in the shape that client reads: [Codex](../brahmastra-codex/README.md), [Cursor](../brahmastra-cursor/README.md), [Gemini CLI](../brahmastra-gemini/README.md). One Node script talks to Brahmastra for all three, and every rule about what to say and when is on the server (`backend/brahmastra/agent_hooks.py`).
+
+## Other agents
 
 The skill installs into any agent that reads Agent Skills:
 

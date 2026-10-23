@@ -52,6 +52,18 @@ storing, on Haiku and Sonnet. Read `evals/agent/README.md` before changing the h
 the instructions or the skill, and rerun it after. An MCP hook's result reaches the model
 ONLY as JSON `hookSpecificOutput.additionalContext`; plain text arrives as "completed".
 
+**The hook rules live in ONE place: `brahmastra/agent_hooks.py`**, for Claude Code, Codex,
+Cursor and Gemini CLI. `brahmastra_recall` (Claude Code's MCP-tool hooks) and
+`POST /hooks?client=` (everyone else, through the Node script
+`plugins/brahmastra-{codex,cursor,gemini}/hooks/brahmastra-hook.mjs`, identical copies)
+both call `agent_hooks.handle`. Each client has a different contract, pinned in
+`tests/test_agent_hooks.py`; a wrong shape is dropped SILENTLY by the client:
+Codex `Stop` continues via `{"decision":"block","reason"}`; Cursor cannot add context to a
+request, only at `sessionStart`, and its `stop` sends `followup_message`; Gemini's
+`AfterAgent` can only reject the answer, so its reminder is carried to the next request.
+The briefing comes with a session's FIRST request, because Claude Code skips MCP-tool
+hooks at launch.
+
 ### Available MCP tools (14)
 
 Use the PRODUCTION Brahmastra MCP (`brahmastra_*` from the Brahmastra plugin) for memory.
@@ -825,7 +837,7 @@ leak made 18 tests take 29 seconds; stubbing it took them to 0.10s.
   transcript, with the passages it read.
 - **Notes:** hybrid search, newest first, long notes folded.
 
-## API routes (40)
+## API routes (41)
 
 ```
 /health  /health/ready
@@ -835,6 +847,7 @@ leak made 18 tests take 29 seconds; stubbing it took them to 0.10s.
 /pipeline/run  /pipeline/status  /pipeline/sync  /pipeline/extract
 /pipeline/resolve  /pipeline/build-graph  /pipeline/cluster-summaries
 /ask
+/hooks                                      POST ?client=codex|cursor|gemini|claude
 /paths
 /workspaces  /workspaces/{workspace_id}  /workspaces/search
 /ingest/modes  /ingest/stats  /ingest/passages
