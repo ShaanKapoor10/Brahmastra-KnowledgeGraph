@@ -175,6 +175,21 @@ def test_a_short_reply_is_not_searched(store, reply):
                                          "prompt": reply}) == {}
 
 
+def test_a_background_task_notification_is_not_a_request(store):
+    """Claude Code submits finished background tasks as prompts; the user asked nothing."""
+    _briefing(store)
+    agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "n",
+                                  "prompt": "Drop Python 3.9: it is end-of-life."})
+    note = ("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>"
+            "Background command \"rename the due field to due_at\" completed</summary>\n</task-notification>")
+    assert agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "n",
+                                         "prompt": note}) == {}
+    out = agent_hooks.handle("claude", {"hook_event_name": "Stop", "session_id": "n",
+                                        "last_assistant_message": "Done."})
+    assert "brahmastra_add_note" in out["hookSpecificOutput"]["additionalContext"], \
+        "the user's request still counts for the Stop check"
+
+
 def test_a_short_first_request_still_brings_the_briefing(store):
     _briefing(store)
     out = agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "q1",

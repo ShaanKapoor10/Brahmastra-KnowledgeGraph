@@ -25,6 +25,12 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    # The types describe the Node runtime (24, chosen in the docker section
+    # below), so their major version moves with it, never on its own: 26 was
+    # proposed for a dashboard running on 24.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     commit-message: { prefix: "deps(dashboard)" }
 
   - package-ecosystem: docker
