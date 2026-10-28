@@ -29,7 +29,7 @@ docker run -d --name "${net}-backend" --network "${net}" --network-alias backend
 docker run -d --name "${net}-frontend" --network "${net}" --network-alias frontend \
   -e NAME=frontend -e PORT=3000 python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4 python -c "${stub}" >/dev/null
 docker run -d --name "${net}-caddy" --network "${net}" -e DOMAIN=localhost -e CADDY_TLS=internal \
-  -v "$(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8.4-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17 >/dev/null
+  -v "$(pwd)/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9 >/dev/null
 sleep 3
 
 fail=0
