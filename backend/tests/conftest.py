@@ -114,6 +114,9 @@ def _isolate_storage_choice(monkeypatch):
     # brahmastra_add_note rebuilds the graph on a thread afterwards; a test
     # that wants that turns it back on, so no other test leaves one running.
     monkeypatch.setenv("GRAPH_AUTO_REFRESH", "0")
+    # Every TestClient runs the app's startup, which would load the embedding
+    # model on a thread in each one.
+    monkeypatch.setenv("WARM_EMBEDDINGS", "0")
     monkeypatch.setenv("POSTGRES_DSN", "")
     monkeypatch.setenv("DATABASE_URL", "")
 

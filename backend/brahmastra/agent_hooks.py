@@ -92,6 +92,12 @@ MIN_RECALL_WORDS = 3
 # background task as a prompt beginning <task-notification>. Searching its
 # boilerplate recalled notes on every such turn (2026-10-28), and treating it
 # as the turn's request would hide the user's real one from the Stop check.
+# What an editor adds to the prompt about itself, not what the user asked: the
+# VS Code extension prepends <ide_opened_file>...</ide_opened_file> and
+# <ide_selection>...</ide_selection>. Counted as the request, a one-word reply
+# ("restarted") was searched for its file path (2026-10-28).
+IDE_CONTEXT = re.compile(r"<ide_[a-z_]+>.*?</ide_[a-z_]+>", re.S)
+
 NOT_A_REQUEST = re.compile(r"\s*<(task-notification|local-command-[a-z]+|command-[a-z]+)\b")
 _FILLER = frozenset("""
     yes yeah yep ok okay sure fine good great thanks thank please pls go ahead
@@ -180,13 +186,29 @@ def reset() -> None:
 # What to say
 # ---------------------------------------------------------------------------
 
+# init_db re-checks the schema in every store it reaches, which over Postgres
+# plus a remote Neo4j costs about 3 seconds a call. A hook runs before every
+# request, and calling it twice per prompt made recall take 4 to 6 seconds
+# (measured 2026-10-28). Once per store per process is enough: the server
+# initialised the store at startup, and this only covers a store first reached
+# here (another workspace).
+_ready: set[str] = set()
+
+
+def _ensure_db() -> None:
+    key = db.describe()
+    if key not in _ready:
+        db.init_db()
+        _ready.add(key)
+
+
 def _clip(text: Any, limit: int = TEXT_CHARS) -> str:
     return str(text or "")[:limit]
 
 
 def briefing_text(reason: str) -> str:
     """The workspace briefing as hook context, or "" when there is none."""
-    db.init_db()
+    _ensure_db()
     note = db.get_note(BRIEFING_NOTE_ID)
     if not note:
         return ""
@@ -206,7 +228,7 @@ def recall_text(prompt: str) -> str:
     query = " ".join((prompt or "").split())[:500]
     if len(query) < 8 or meaningful_words(query) < MIN_RECALL_WORDS:
         return ""
-    db.init_db()
+    _ensure_db()
     # The briefing has its own delivery (session start or first request).
     notes = [n for n in db.search_notes(query, limit=RECALL_NOTES + 1)
              if n.get("id") != BRIEFING_NOTE_ID][:RECALL_NOTES]
@@ -238,6 +260,7 @@ def on_prompt(session: str, prompt: str) -> str:
     always deliver it: Claude Code skips MCP-tool hooks at launch (the server
     is not connected yet), and Codex 0.154 rejected SessionStart context.
     """
+    prompt = IDE_CONTEXT.sub("", prompt or "").strip()
     if NOT_A_REQUEST.match(prompt or ""):
         return ""
     state = _session(session)
