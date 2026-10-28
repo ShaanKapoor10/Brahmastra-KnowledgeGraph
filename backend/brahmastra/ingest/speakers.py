@@ -35,6 +35,8 @@ import re
 from dataclasses import replace
 from typing import Any, Callable
 
+from brahmastra.errors import public_error
+
 # Labels a diarizer emits: Speaker A, Speaker 1, SPEAKER_00, spk_2, S1, Unknown Speaker.
 _ANONYMOUS = re.compile(
     r"^\(?\s*(?:(?:unknown\s+)?speaker|spk|s)\s*[_\- ]?\s*(?:[a-z]|\d{1,2})?\s*\)?$",
@@ -170,7 +172,7 @@ def identify(turns: list[Any], title: str = "", use_model: bool = True,
             proposed = _ask_model(turns, rest, {k: v for k, v in mapping.items() if v},
                                   title, chat)
         except Exception as exc:                          # noqa: BLE001
-            report["model_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            report["model_error"] = public_error(exc, limit=200)
             proposed = {}
         taken = {v for v in mapping.values() if v} | named
         counts: dict[str, int] = {}
