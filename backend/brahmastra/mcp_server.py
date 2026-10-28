@@ -629,6 +629,9 @@ def brahmastra_add_note(
     from datetime import datetime, timezone
     db.upsert_note(nid, title, content, last_edited=datetime.now(timezone.utc).isoformat(),
                    mark_pending=True, publish=publish or None, source="mcp")
+    # The end-of-turn reminder is for agents that have NOT stored anything.
+    from brahmastra import agent_hooks
+    agent_hooks.note_stored()
 
     # Extract immediately, and treat failure as a delay rather than an error.
     # A rate limit or a dead provider leaves the note `pending`, which is

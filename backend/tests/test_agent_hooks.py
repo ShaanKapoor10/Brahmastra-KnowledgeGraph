@@ -162,6 +162,58 @@ def test_gemini_carries_the_reminder_to_the_next_request(store):
     assert "previous turn" not in json.dumps(again)
 
 
+# ---------------------------------------------------------------------------
+# Noise (2026-10-28): recall on "yes go ahead", a reminder after nearly every turn
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("reply", ["yes", "yes go ahead", "merge it", "ok continue", "lets do this now"])
+def test_a_short_reply_is_not_searched(store, reply):
+    """It continues the previous turn, whose notes were already recalled."""
+    agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "q",
+                                  "prompt": RENAME})
+    assert agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "q",
+                                         "prompt": reply}) == {}
+
+
+def test_a_short_first_request_still_brings_the_briefing(store):
+    _briefing(store)
+    out = agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "q1",
+                                        "prompt": "continue"})
+    assert "Tuesdays" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_no_reminder_once_the_agent_stored_a_note_this_turn(store):
+    stop = {"hook_event_name": "Stop", "session_id": "r", "last_assistant_message": SETTLED_REPLY}
+    agent_hooks.note_stored()                      # a note from an EARLIER turn
+    agent_hooks.handle("codex", {"hook_event_name": "UserPromptSubmit", "session_id": "r",
+                                 "prompt": RENAME})
+    assert agent_hooks.handle("codex", stop)["decision"] == "block", "an older store does not count"
+    agent_hooks.note_stored()
+    assert agent_hooks.handle("codex", stop) == {}, "stored this turn: nothing to remind"
+
+
+def test_storing_through_the_mcp_tool_counts(store):
+    from brahmastra import mcp_server
+
+    mcp_server.brahmastra_recall(prompt=RENAME, event="UserPromptSubmit", session="m")
+    mcp_server.brahmastra_add_note("Decision: keep due", "Tomas Weil decided to keep the field due.")
+    assert mcp_server.brahmastra_recall(prompt=SETTLED_REPLY, event="Stop", active="false",
+                                        session="m") == ""
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("I used a dict because lookups are O(1).", False),
+    ("Renamed it instead of adding a wrapper; the tests should not need changes.", False),
+    ("I won't touch the CI config.", False),
+    ("Drop Python 3.9: it is end-of-life.", True),
+    ("I can't proceed: the team decided to keep the field named due.", True),
+    ("The root cause was a naive datetime compared with UTC.", True),
+    ("Renames need Tomas Weil's sign-off.", True),
+])
+def test_only_words_that_mark_a_settled_matter_count(text, expected):
+    assert agent_hooks.settled(text) is expected
+
+
 def test_session_state_stays_bounded(store, monkeypatch):
     monkeypatch.setattr(agent_hooks, "_SESSIONS_MAX", 3)
     for i in range(10):
