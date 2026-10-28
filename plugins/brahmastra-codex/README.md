@@ -31,6 +31,6 @@ Agents with only the MCP server almost never looked (measured in `evals/agent`);
 
 3. Tell the hooks where Brahmastra is: set `BRAHMASTRA_URL` (the address without `/mcp`, such as `https://brahmastra.example.com/v1` or `http://localhost:8001`), `BRAHMASTRA_TOKEN` and `BRAHMASTRA_WORKSPACE`. Alternatively, put them in `~/.brahmastra/agent.json` as `{"url": ..., "token": ..., "workspace": ...}`, readable only by you.
 
-The hooks need Node 18 or later. They never fail a turn: if Brahmastra is unreachable they add nothing and say why on stderr.
+The hooks need Node 18 or later. They never fail a turn: if Brahmastra is unreachable they add nothing and say why on stderr. They send a token only over https, or plain http to this machine (`BRAHMASTRA_ALLOW_HTTP=1` allows a private network).
 
 The dashboard's **Account > Connect an agent** fills all of this in for your install.
