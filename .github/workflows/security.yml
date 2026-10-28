@@ -131,7 +131,11 @@ jobs:
           context: ${{ matrix.image.context }}
           load: true
           tags: brahmastra-${{ matrix.image.name }}:scan
-          cache-from: type=gha,scope=${{ matrix.image.name }}
+          # Scan what a release would ship, and a release builds from scratch.
+          # With CI's layer cache, the backup image's `apt-get upgrade` layer
+          # was reused for days and the scan failed on Debian fixes the image
+          # would already contain (brotli, openssl; 2026-10-28).
+          no-cache: true
       - name: Ignore file has a reason and an expiry for every entry
         run: python .github/scripts/audit_gate.py trivyignore .trivyignore.yaml
       - name: Trivy (HIGH/CRITICAL with a fix)

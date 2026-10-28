@@ -46,4 +46,4 @@ Cursor cannot add context to an individual request, so unlike Claude Code, Codex
 
 4. Restart Cursor.
 
-The hooks need Node 18 or later. They never fail a turn: if Brahmastra is unreachable they add nothing.
+The hooks need Node 18 or later. They never fail a turn: if Brahmastra is unreachable they add nothing. They send a token only over https, or plain http to this machine (`BRAHMASTRA_ALLOW_HTTP=1` allows a private network).

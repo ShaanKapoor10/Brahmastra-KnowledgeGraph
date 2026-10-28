@@ -45,13 +45,28 @@ let input = "";
 process.stdin.setEncoding("utf8");
 for await (const chunk of process.stdin) input += chunk;
 
+// A token crosses the network only encrypted. Plain http is for this machine
+// (a local backend); anything else needs https, or BRAHMASTRA_ALLOW_HTTP=1 for
+// a deliberate exception such as a private network.
+let target;
+try {
+  target = new URL(`${base}/hooks`);
+} catch {
+  fail(`BRAHMASTRA_URL is not a URL: ${base}`);
+}
+const loopback = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i.test(target.hostname);
+if (token && target.protocol === "http:" && !loopback && process.env.BRAHMASTRA_ALLOW_HTTP !== "1") {
+  fail(`refusing to send a token over plain http to ${target.hostname}; use https`);
+}
+
 const headers = { "Content-Type": "application/json" };
 if (token) headers.Authorization = `Bearer ${token}`;
 if (workspace) headers["X-Brahmastra-Workspace"] = workspace;
 
 let response;
 try {
-  response = await fetch(`${base}/hooks?client=${encodeURIComponent(client)}`, {
+  target.searchParams.set("client", client);
+  response = await fetch(target, {
     method: "POST",
     headers,
     body: input.trim() || "{}",

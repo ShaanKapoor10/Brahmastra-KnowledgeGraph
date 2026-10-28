@@ -321,6 +321,15 @@ def test_the_script_reads_a_config_file_when_no_variable_is_set(stub, tmp_path):
 
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_a_token_never_crosses_the_network_unencrypted(tmp_path):
+    """Plain http only to this machine; the file's address is not trusted further."""
+    done = _run({"BRAHMASTRA_URL": "http://kb.example.invalid", "BRAHMASTRA_TOKEN": "fake-token-789"},
+                '{"hook_event_name": "Stop"}', tmp_path)
+    assert done.returncode == 0 and done.stdout == ""
+    assert "refusing to send a token over plain http" in done.stderr
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_the_script_never_fails_the_turn(tmp_path):
     done = _run({"BRAHMASTRA_URL": "http://127.0.0.1:9", "BRAHMASTRA_HOOK_TIMEOUT_MS": "3000"},
                 '{"hook_event_name": "Stop"}', tmp_path)
