@@ -335,7 +335,8 @@ docker compose up -d --build        # dashboard on :3000, API on :8001
 
 Each install brings hooks: the notes matching every request reach the agent without it having to ask, and it is reminded to store the decisions it settles. Measured, that is what makes agents actually use the memory.
 Your project keeps its own CLAUDE.md or AGENTS.md; nothing about Brahmastra goes in it.
-Details: [plugins/brahmastra](plugins/brahmastra/README.md).
+
+**New to it?** [Using Brahmastra with your agent](plugins/brahmastra/README.md#getting-started): get access, connect, check it works, and what happens while you work.
 
 </div>
 
