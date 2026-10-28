@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -70,10 +71,27 @@ TEXT_CHARS = 4000
 # it errored in practice, and Claude Code then showed the agent the hook's own
 # instructions, which the agent answered with {"ok": true} as its final reply
 # (measured 2026-10-23).
+#
+# Narrowed 2026-10-28: "because", "reason", "instead of", "won't", "should not"
+# and "policy" occur in nearly every explanation, so in real sessions the
+# reminder fired on almost every turn, which teaches an agent to ignore it.
 SETTLED = re.compile(
-    r"\b(decid\w*|decision|because|reason|root cause|the (issue|problem|cause) was|caused by|"
-    r"instead of|declin\w*|can't proceed|cannot proceed|won't|should not|must not|"
-    r"drop\w*|deprecat\w*|no longer|policy|requirement|constraint|agreed|sign-off)\b", re.I)
+    r"\b(decid\w*|decision|root cause|the (issue|problem|cause) was|caused by|turns? out|"
+    r"declin\w*|can't proceed|cannot proceed|must not|drop(s|ped|ping)?|deprecat\w*|"
+    r"no longer|end[- ]of[- ]life|requirement|constraint|agreed|sign(s|ed)?[- ]off|"
+    r"defer\w*|postpon\w*|hold off|don't do this now)\b", re.I)
+
+# A request with fewer meaningful words than this is a reply to the previous
+# turn ("yes", "go ahead", "merge it"). Its topic was recalled with that turn,
+# and a search for "yes go ahead" returns whatever matches nothing in
+# particular (2026-10-28: unrelated meeting notes). A session's first request
+# still brings the briefing.
+MIN_RECALL_WORDS = 3
+_FILLER = frozenset("""
+    yes yeah yep ok okay sure fine good great thanks thank please pls go ahead
+    continue proceed now then also and the that this these those them all it its
+    lets let's do done can you could would will just with for on in to of
+""".split())
 
 REMINDER = (
     "Brahmastra: if this turn settled something a teammate will need later that the code "
@@ -117,9 +135,39 @@ def _session(session: str) -> dict[str, Any]:
         return state
 
 
+# When each caller last stored a note, so the end-of-turn reminder is not sent
+# to an agent that already stored one this turn. Keyed by workspace and the
+# signed-in user; a stdio server has no identity and serves one local caller.
+_stored: OrderedDict[tuple[str, str], float] = OrderedDict()
+
+
+def _caller() -> tuple[str, str]:
+    from brahmastra.accounts import current_identity
+
+    identity = current_identity()
+    who = getattr(identity, "user_id", None) or getattr(identity, "kind", None) or "local"
+    return db.workspace(), str(who)
+
+
+def note_stored() -> None:
+    """Called by brahmastra_add_note: this caller stored something just now."""
+    key = _caller()
+    with _lock:
+        _stored.pop(key, None)
+        _stored[key] = time.time()
+        while len(_stored) > _SESSIONS_MAX:
+            _stored.popitem(last=False)
+
+
+def _stored_this_turn(state: dict[str, Any]) -> bool:
+    started = state.get("turn_started")
+    return started is not None and _stored.get(_caller(), 0.0) >= started
+
+
 def reset() -> None:
     with _lock:
         _sessions.clear()
+        _stored.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +190,15 @@ def briefing_text(reason: str) -> str:
     return f"Brahmastra memory: this workspace's briefing, {reason}.\n## {note.get('title')}\n{body}"
 
 
+def meaningful_words(prompt: str) -> int:
+    words = re.findall(r"[a-z0-9][a-z0-9_.'-]*", (prompt or "").lower())
+    return sum(1 for w in words if w not in _FILLER and len(w) > 1)
+
+
 def recall_text(prompt: str) -> str:
     """The notes matching a request, or "" when nothing matches."""
     query = " ".join((prompt or "").split())[:500]
-    if len(query) < 8:
+    if len(query) < 8 or meaningful_words(query) < MIN_RECALL_WORDS:
         return ""
     db.init_db()
     # The briefing has its own delivery (session start or first request).
@@ -188,6 +241,7 @@ def on_prompt(session: str, prompt: str) -> str:
         parts.append(CARRIED_REMINDER)
     if session:
         state["request"] = _clip(prompt)
+        state["turn_started"] = time.time()
     parts.append(recall_text(prompt))
     return "\n\n".join(p for p in parts if p)
 
@@ -195,7 +249,7 @@ def on_prompt(session: str, prompt: str) -> str:
 def on_stop(session: str, last_message: str | None = None, active: bool = False) -> str:
     """The store reminder, once per turn, when the turn reads as settling something."""
     state = _session(session)
-    if active:
+    if active or _stored_this_turn(state):
         return ""
     reply = last_message if last_message is not None else state.get("response", "")
     return REMINDER if settled(reply, state.get("request", "")) else ""
@@ -206,7 +260,7 @@ def on_response(session: str, reply: str, carry: bool) -> None:
         return
     state = _session(session)
     state["response"] = _clip(reply)
-    if carry and settled(reply, state.get("request", "")):
+    if carry and not _stored_this_turn(state) and settled(reply, state.get("request", "")):
         state["carry_reminder"] = True
 
 
