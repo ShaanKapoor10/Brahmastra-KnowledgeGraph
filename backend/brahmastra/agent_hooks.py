@@ -87,6 +87,12 @@ SETTLED = re.compile(
 # particular (2026-10-28: unrelated meeting notes). A session's first request
 # still brings the briefing.
 MIN_RECALL_WORDS = 3
+
+# Turns the client starts itself, not the user: Claude Code submits a finished
+# background task as a prompt beginning <task-notification>. Searching its
+# boilerplate recalled notes on every such turn (2026-10-28), and treating it
+# as the turn's request would hide the user's real one from the Stop check.
+NOT_A_REQUEST = re.compile(r"\s*<(task-notification|local-command-[a-z]+|command-[a-z]+)\b")
 _FILLER = frozenset("""
     yes yeah yep ok okay sure fine good great thanks thank please pls go ahead
     continue proceed now then also and the that this these those them all it its
@@ -232,6 +238,8 @@ def on_prompt(session: str, prompt: str) -> str:
     always deliver it: Claude Code skips MCP-tool hooks at launch (the server
     is not connected yet), and Codex 0.154 rejected SessionStart context.
     """
+    if NOT_A_REQUEST.match(prompt or ""):
+        return ""
     state = _session(session)
     parts = []
     if session and not state.get("briefed"):
