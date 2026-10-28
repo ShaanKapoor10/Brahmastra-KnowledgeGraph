@@ -190,6 +190,20 @@ def test_a_background_task_notification_is_not_a_request(store):
         "the user's request still counts for the Stop check"
 
 
+def test_what_the_editor_adds_is_not_the_request(store):
+    """VS Code prepends the open file; a one-word reply stays a one-word reply."""
+    agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "e",
+                                  "prompt": RENAME})
+    prompt = ("<ide_opened_file>The user opened the file c:\\repo\\larkspur\\core.py in the IDE. "
+              "This may or may not be related to the current task.</ide_opened_file>restarted")
+    assert agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "e",
+                                         "prompt": prompt}) == {}
+    selected = "<ide_selection>def due_today(): ...</ide_selection>" + RENAME
+    out = agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "e",
+                                        "prompt": selected})
+    assert "keep the field named due" in out["hookSpecificOutput"]["additionalContext"]
+
+
 def test_a_short_first_request_still_brings_the_briefing(store):
     _briefing(store)
     out = agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "q1",

@@ -92,6 +92,12 @@ MIN_RECALL_WORDS = 3
 # background task as a prompt beginning <task-notification>. Searching its
 # boilerplate recalled notes on every such turn (2026-10-28), and treating it
 # as the turn's request would hide the user's real one from the Stop check.
+# What an editor adds to the prompt about itself, not what the user asked: the
+# VS Code extension prepends <ide_opened_file>...</ide_opened_file> and
+# <ide_selection>...</ide_selection>. Counted as the request, a one-word reply
+# ("restarted") was searched for its file path (2026-10-28).
+IDE_CONTEXT = re.compile(r"<ide_[a-z_]+>.*?</ide_[a-z_]+>", re.S)
+
 NOT_A_REQUEST = re.compile(r"\s*<(task-notification|local-command-[a-z]+|command-[a-z]+)\b")
 _FILLER = frozenset("""
     yes yeah yep ok okay sure fine good great thanks thank please pls go ahead
@@ -254,6 +260,7 @@ def on_prompt(session: str, prompt: str) -> str:
     always deliver it: Claude Code skips MCP-tool hooks at launch (the server
     is not connected yet), and Codex 0.154 rejected SessionStart context.
     """
+    prompt = IDE_CONTEXT.sub("", prompt or "").strip()
     if NOT_A_REQUEST.match(prompt or ""):
         return ""
     state = _session(session)
