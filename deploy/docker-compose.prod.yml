@@ -296,7 +296,7 @@ services:
   prometheus:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     read_only: true
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -337,7 +337,7 @@ services:
   grafana:
     <<: *hardening
     profiles: ["monitoring"]
-    image: grafana/grafana-oss:11.3.1@sha256:147620479985b5780600dea24223c71eb8525e01727cce7fcd4bba8896d66d60
+    image: grafana/grafana-oss:13.0.2@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
     read_only: true
     environment:
       GF_SECURITY_ADMIN_USER: admin
