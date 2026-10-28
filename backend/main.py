@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
     preflight.check()
     _try_init_db()
     refresher = asyncio.create_task(_refresh_snapshots_forever())
+    warming = asyncio.create_task(_warm_embeddings())
     try:
         if _mcp_http_enabled():
             from brahmastra.mcp_server import mcp as _mcp
@@ -100,6 +101,27 @@ async def lifespan(app: FastAPI):
             yield
     finally:
         refresher.cancel()
+        warming.cancel()
+
+
+async def _warm_embeddings() -> None:
+    """
+    Load the embedding model in the background as soon as the server starts.
+
+    The first search otherwise loads it, about 8 seconds in the container, and
+    the first search is usually an agent hook with a 15-second limit: after a
+    rebuild, a session's first prompt took 21.5 seconds and Claude Code dropped
+    its recall and briefing (2026-10-28). Never raises; a failed load is the
+    same lexical fallback search already has. WARM_EMBEDDINGS=0 skips it.
+    """
+    if os.environ.get("WARM_EMBEDDINGS", "1") == "0":
+        return
+    try:
+        from brahmastra import embeddings
+
+        await asyncio.to_thread(embeddings.get_model)
+    except Exception:                                   # noqa: BLE001
+        pass
 
 
 async def _refresh_snapshots_forever() -> None:

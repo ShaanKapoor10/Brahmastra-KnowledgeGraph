@@ -229,6 +229,20 @@ def test_only_words_that_mark_a_settled_matter_count(text, expected):
     assert agent_hooks.settled(text) is expected
 
 
+def test_a_hook_initialises_the_store_once_not_per_prompt(store, monkeypatch):
+    """init_db costs ~3 s against Postgres plus a remote Neo4j; hooks run every prompt."""
+    from brahmastra import db
+
+    calls = []
+    real = db.init_db
+    monkeypatch.setattr(db, "init_db", lambda: (calls.append(1), real())[1])
+    agent_hooks._ready.clear()
+    for i in range(3):
+        agent_hooks.handle("claude", {"hook_event_name": "UserPromptSubmit", "session_id": f"i{i}",
+                                      "prompt": RENAME})
+    assert len(calls) == 1, calls
+
+
 def test_session_state_stays_bounded(store, monkeypatch):
     monkeypatch.setattr(agent_hooks, "_SESSIONS_MAX", 3)
     for i in range(10):

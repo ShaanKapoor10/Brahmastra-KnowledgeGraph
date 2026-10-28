@@ -180,13 +180,29 @@ def reset() -> None:
 # What to say
 # ---------------------------------------------------------------------------
 
+# init_db re-checks the schema in every store it reaches, which over Postgres
+# plus a remote Neo4j costs about 3 seconds a call. A hook runs before every
+# request, and calling it twice per prompt made recall take 4 to 6 seconds
+# (measured 2026-10-28). Once per store per process is enough: the server
+# initialised the store at startup, and this only covers a store first reached
+# here (another workspace).
+_ready: set[str] = set()
+
+
+def _ensure_db() -> None:
+    key = db.describe()
+    if key not in _ready:
+        db.init_db()
+        _ready.add(key)
+
+
 def _clip(text: Any, limit: int = TEXT_CHARS) -> str:
     return str(text or "")[:limit]
 
 
 def briefing_text(reason: str) -> str:
     """The workspace briefing as hook context, or "" when there is none."""
-    db.init_db()
+    _ensure_db()
     note = db.get_note(BRIEFING_NOTE_ID)
     if not note:
         return ""
@@ -206,7 +222,7 @@ def recall_text(prompt: str) -> str:
     query = " ".join((prompt or "").split())[:500]
     if len(query) < 8 or meaningful_words(query) < MIN_RECALL_WORDS:
         return ""
-    db.init_db()
+    _ensure_db()
     # The briefing has its own delivery (session start or first request).
     notes = [n for n in db.search_notes(query, limit=RECALL_NOTES + 1)
              if n.get("id") != BRIEFING_NOTE_ID][:RECALL_NOTES]
