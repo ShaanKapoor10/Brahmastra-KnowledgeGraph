@@ -110,7 +110,7 @@ x-app-env: &app-env
 services:
   caddy:
     <<: *hardening
-    image: caddy:2.11.6-alpine@sha256:d44355d3c2149dc580ce2cac735955d1c08d3d00882c30489c241aa51a5c10d9
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
     # Binding 80/443 is the one privilege the edge needs.
     cap_add: [NET_BIND_SERVICE]
     read_only: true
@@ -184,7 +184,7 @@ services:
 
   postgres:
     <<: *hardening
-    image: pgvector/pgvector:0.8.7-pg17-bookworm@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    image: pgvector/pgvector:0.8.7-pg17-bookworm@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
     # The entrypoint fixes data-directory ownership as root, then drops to the
     # postgres user; these are exactly the capabilities that needs.
     cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
@@ -296,7 +296,7 @@ services:
   prometheus:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     read_only: true
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -319,7 +319,7 @@ services:
   alertmanager:
     <<: *hardening
     profiles: ["monitoring"]
-    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    image: prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b
     read_only: true
     entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
     environment:
@@ -337,7 +337,7 @@ services:
   grafana:
     <<: *hardening
     profiles: ["monitoring"]
-    image: grafana/grafana-oss:11.3.1@sha256:147620479985b5780600dea24223c71eb8525e01727cce7fcd4bba8896d66d60
+    image: grafana/grafana-oss:13.0.2@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2
     read_only: true
     environment:
       GF_SECURITY_ADMIN_USER: admin
