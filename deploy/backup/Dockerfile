@@ -5,7 +5,7 @@
 # that has to understand `CREATE EXTENSION vector` in the dump.
 #
 # restic comes from Debian's signed archive (verified by apt), not a download.
-FROM pgvector/pgvector:0.8.7-pg17-bookworm@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+FROM pgvector/pgvector:0.8.7-pg17-bookworm@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
 
 # gosu is the postgres image's tool for dropping root in ITS entrypoint, which
 # this image replaces. It is a Go binary built with whatever Go was current
